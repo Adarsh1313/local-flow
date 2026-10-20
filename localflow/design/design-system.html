@@ -6,93 +6,371 @@
 <title>LocalFlow Design System</title>
 <link rel="stylesheet" href="tokens.css">
 <style>
-  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-body); font-size: var(--text-body); }
-  main { max-width: 860px; margin: 0 auto; padding: var(--space-6) var(--space-4); }
-  h1 { font-family: var(--font-display); font-size: var(--text-title); font-weight: var(--weight-semibold); margin: 0 0 var(--space-2); }
-  h2 { font-size: var(--text-subtitle); font-weight: var(--weight-semibold); margin: var(--space-6) 0 var(--space-2); }
-  p, small { color: var(--color-text-muted); }
-  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--space-2); }
-  .sw { background: var(--color-surface); border-radius: var(--radius-group); padding: var(--space-2); }
-  .sw i { display: block; height: 40px; border-radius: var(--radius-control); border: 1px solid var(--color-border); margin-bottom: var(--space-2); }
-  .sw b { display: block; font-weight: var(--weight-semibold); }
-  .sw small { font-size: var(--text-caption); }
-  .type div { margin: var(--space-1) 0; }
-  .ruler div { display: flex; align-items: center; gap: var(--space-3); margin: var(--space-1) 0; color: var(--color-text-muted); font-size: var(--text-caption); }
-  .ruler span { display: inline-block; height: 12px; background: var(--color-accent); border-radius: 2px; }
-  .group { background: var(--color-surface); border-radius: var(--radius-group); }
-  .row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-divider); }
-  .row:first-child { border-top: 0; }
-  .row .t { flex: 1; }
-  .row small { display: block; font-size: var(--text-caption); }
-  button { font: inherit; border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; transition: background var(--duration-fast); }
-  .std { background: var(--color-control); color: var(--color-text); border: 1px solid var(--color-border); }
-  .std:hover { background: var(--color-control-hover); } .std:active { background: var(--color-control-active); }
-  .pri { background: var(--color-accent); color: var(--color-accent-contrast); border: 0; font-weight: var(--weight-semibold); }
-  .pri:hover { background: var(--color-accent-hover); } .pri:active { background: var(--color-accent-active); }
-  .sub { background: transparent; color: var(--color-text); border: 0; }
-  .sub:hover { background: var(--color-surface-hover); }
-  button:disabled { color: var(--color-text-disabled); cursor: default; }
-  button:focus-visible, .switch:focus-visible, input:focus-visible { outline: 1.5px solid var(--color-focus); outline-offset: 2px; }
-  .key { background: var(--color-control); border: 1px solid var(--color-border); border-bottom-width: 2px; border-radius: var(--radius-control); padding: 2px 8px; }
-  .switch { width: 40px; height: 20px; border-radius: var(--radius-switch); position: relative; flex: none; background: var(--color-accent); border: 0; padding: 0; }
-  .switch::after { content: ""; position: absolute; right: 4px; top: 4px; width: 12px; height: 12px; border-radius: 50%; background: var(--color-accent-contrast); }
-  .switch.off { background: transparent; border: 1px solid #9a9a9a; }
-  .switch.off::after { left: 4px; right: auto; top: 3px; width: 10px; height: 10px; background: #c8c8c8; }
-  input { font: inherit; background: var(--color-control); color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-control); padding: 5px 10px; }
-  input:focus { border-color: var(--color-accent); }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0c0c0d; color: var(--color-text); font-family: var(--font-body); font-size: var(--text-body); }
+  main { max-width: 1040px; margin: 0 auto; padding: var(--space-6) var(--space-4) 80px; }
+  h1 { font-family: var(--font-display); font-size: 28px; font-weight: var(--weight-semibold); margin: 0 0 var(--space-1); }
+  h2 { font-family: var(--font-display); font-size: 18px; font-weight: var(--weight-semibold); margin: 48px 0 var(--space-1); }
+  .lede { color: var(--color-text-muted); margin: 0 0 var(--space-4); max-width: 70ch; line-height: 1.5; }
+  code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; color: var(--color-text-dim); }
+  .i { font-family: var(--font-icon); font-style: normal; line-height: 1; }
+
+  /* ---------- shared pieces ---------- */
+  .lit { position: relative; }
+  .lit::before { content: ""; position: absolute; left: 10%; right: 10%; top: 0; height: 1px; pointer-events: none;
+    background: linear-gradient(90deg, transparent, var(--color-edge-glow), transparent); }
+  .card { background: var(--color-surface); border-radius: var(--radius-card); }
+  .row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); position: relative; transition: background var(--duration-hover) var(--ease-colour); }
+  .row + .row::before { content: ""; position: absolute; top: 0; left: var(--space-4); right: var(--space-4); height: 1px;
+    background: linear-gradient(90deg, transparent, var(--color-divider) 12%, var(--color-divider) 88%, transparent); }
+  .row .t { flex: 1; min-width: 0; }
+  .row small { display: block; font-size: var(--text-caption); color: var(--color-text-muted); margin-top: 1px; }
+  .row.click { cursor: pointer; border-radius: var(--radius-card); }
+  .row.click:hover { background: var(--color-surface-hover); }
+  .group-title { font-size: var(--text-subtitle); font-weight: var(--weight-semibold); color: var(--color-text-muted); margin: var(--space-5) 0 var(--space-2) var(--space-1); }
+
+  button { font: inherit; color: inherit; cursor: pointer; border: 0; }
+  .btn { background: var(--color-control); border: 1px solid var(--color-border); border-radius: var(--radius-control); padding: 5px 12px; font-size: var(--text-caption);
+    transition: background var(--duration-hover) var(--ease-colour), transform var(--duration-hover) var(--ease-out); }
+  .btn:hover { background: var(--color-control-hover); }
+  .btn:active { background: var(--color-control-active); transform: scale(.97); }
+  .btn.pri { background: var(--color-select); color: var(--color-select-contrast); border-color: transparent; font-weight: var(--weight-semibold); }
+  .btn.pri:hover { background: var(--color-select-hover); }
+  .btn.sub { background: transparent; border-color: transparent; }
+  .btn.sub:hover { background: var(--color-surface-hover); }
+  .btn:disabled { color: var(--color-text-disabled); cursor: default; }
+  .btn.icon { padding: 6px 8px; font-family: var(--font-icon); font-size: 12px; }
+  :focus-visible { outline: 1.5px solid var(--color-focus); outline-offset: 2px; }
+
+  .key { display: inline-block; background: var(--color-control); border: 1px solid var(--color-border); border-bottom-width: 2px; border-radius: var(--radius-chip);
+    padding: 2px 8px; font-size: var(--text-caption); color: var(--color-text-dim); }
+
+  .switch { width: 40px; height: 22px; border-radius: var(--radius-capsule); position: relative; flex: none; padding: 0;
+    background: var(--color-control); box-shadow: inset 0 0 0 1px var(--color-border);
+    transition: background var(--duration-move) var(--ease-colour), box-shadow var(--duration-move) var(--ease-colour); }
+  .switch::after { content: ""; position: absolute; left: 4px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: var(--color-text-muted);
+    transition: transform var(--duration-move) var(--ease-out), background var(--duration-move) var(--ease-colour), width var(--duration-hover) var(--ease-out); }
+  .switch:active::after { width: 18px; }
+  .switch[aria-checked="true"] { background: var(--color-select); box-shadow: inset 0 0 0 1px transparent; }
+  .switch[aria-checked="true"]::after { transform: translateX(18px); background: var(--color-select-contrast); }
+  .switch[aria-checked="true"]:active::after { transform: translateX(14px); }
+
+  .seg { display: inline-flex; background: var(--color-control); border-radius: var(--radius-capsule); padding: 3px; position: relative; }
+  .seg button { position: relative; z-index: 1; padding: 3px 12px; border-radius: var(--radius-capsule); font-size: var(--text-caption); color: var(--color-text-dim); background: none;
+    transition: color var(--duration-move) var(--ease-colour); }
+  .seg button[aria-pressed="true"] { color: var(--color-select-contrast); }
+  .seg .thumb { position: absolute; top: 3px; bottom: 3px; border-radius: var(--radius-capsule); background: var(--color-select);
+    transition: left var(--duration-move) var(--ease-out), width var(--duration-move) var(--ease-out); }
+
+  input, textarea { font: inherit; background: var(--color-control); color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-control); padding: 5px 10px;
+    transition: border-color var(--duration-hover) var(--ease-colour), box-shadow var(--duration-hover) var(--ease-colour); }
+  input:focus, textarea:focus { outline: none; border-color: var(--color-accent); box-shadow: 0 0 0 3px rgba(156, 195, 230, .15); }
+
+  /* ---------- window chrome ---------- */
+  .window { background: var(--color-bg); border-radius: var(--radius-window); box-shadow: 0 0 0 1px #2a2a2f, 0 24px 60px rgba(0,0,0,.55); overflow: hidden; }
+  .stage { display: flex; gap: var(--space-6); flex-wrap: wrap; align-items: flex-start; }
+  .entering { animation: rise var(--duration-enter) var(--ease-out) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(var(--rise-distance)); } }
+
+  /* ---------- settings ---------- */
+  .settings { width: 720px; height: 600px; display: flex; max-width: 100%; }
+  .nav { width: 196px; flex: none; background: var(--color-nav); display: flex; flex-direction: column; padding: var(--space-4) var(--space-2) var(--space-3); }
+  .brand { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-2) var(--space-5); font-weight: var(--weight-semibold); }
+  .brand .mark { width: 24px; height: 24px; border-radius: 50%; background: var(--color-select); color: var(--color-select-contrast); display: grid; place-items: center; font-size: 11px; }
+  .navlist { position: relative; display: flex; flex-direction: column; gap: 2px; }
+  .navlist .cap { position: absolute; left: 0; right: 0; height: 36px; border-radius: var(--radius-capsule); background: var(--color-surface-hover);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06); transition: transform var(--duration-move) var(--ease-out); }
+  .navitem { position: relative; z-index: 1; height: 36px; display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-3); border-radius: var(--radius-capsule);
+    background: none; color: var(--color-text-dim); text-align: left; transition: color var(--duration-hover) var(--ease-colour), background var(--duration-hover) var(--ease-colour); }
+  .navitem:hover:not([aria-current]) { background: rgba(255,255,255,.03); color: var(--color-text); }
+  .navitem[aria-current] { color: var(--color-text); }
+  .navitem .i { font-size: 14px; width: 18px; }
+  .stats { margin-top: auto; display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3) var(--space-2); padding: var(--space-3) var(--space-2) var(--space-3); }
+  .stat b { display: block; font-family: var(--font-display); font-size: var(--text-stat); font-weight: var(--weight-semibold); line-height: 1.1; padding-left: 8px; position: relative; font-variant-numeric: tabular-nums; }
+  .stat b::before { content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 2px; border-radius: 1px; background: var(--bar); }
+  .stat small { display: block; font-size: 11px; color: var(--color-text-muted); padding-left: 8px; }
+  .stat.wide { grid-column: span 2; }
+  .navfoot { display: flex; gap: var(--space-1); padding: 0 var(--space-2); }
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .head { display: flex; align-items: center; padding: var(--space-4) var(--space-4) var(--space-1) var(--space-6); }
+  .head h3 { font-family: var(--font-display); font-size: var(--text-title); font-weight: var(--weight-semibold); margin: 0; flex: 1; }
+  .scroll { flex: 1; overflow-y: auto; padding: 0 var(--space-5) var(--space-5) var(--space-5); scrollbar-width: thin; scrollbar-color: var(--color-border) transparent; }
+  .page { animation: swap 140ms var(--ease-colour); }
+  @keyframes swap { from { opacity: .4; } }
+
+  /* ---------- scratchpad ---------- */
+  .notes { width: 440px; height: 560px; display: flex; flex-direction: column; max-width: 100%; }
+  .notes .head { padding-left: var(--space-5); }
+  .notes .sub-l { color: var(--color-text-muted); font-size: var(--text-caption); padding: 0 var(--space-5); }
+  .notes textarea { flex: 1; margin: var(--space-3) var(--space-4) var(--space-2); resize: none; border-radius: var(--radius-card); padding: var(--space-3) var(--space-4); line-height: 1.55;
+    background: var(--color-surface); border-color: transparent; }
+  .notes .foot { display: flex; align-items: center; gap: var(--space-1); padding: 0 var(--space-4) var(--space-4); }
+  .notes .foot .status { flex: 1; color: var(--color-text-muted); font-size: var(--text-caption); }
+  .copy .ok { display: none; color: var(--color-success); }
+  .copy.done .ok { display: inline; animation: pop var(--duration-move) var(--ease-out); }
+  .copy.done .lbl-copy { display: none; }
+  .copy .lbl-done { display: none; } .copy.done .lbl-done { display: inline; }
+  @keyframes pop { from { transform: scale(.4); opacity: 0; } }
+
+  /* ---------- desktop strip: pill + hover bar ---------- */
+  .desk { height: 230px; border-radius: var(--radius-card); position: relative; overflow: hidden;
+    background: radial-gradient(600px 220px at 30% 20%, #3b4a5c, transparent), radial-gradient(500px 200px at 80% 60%, #5c4a3b, transparent), #202226; }
+  .taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 40px; background: rgba(28,28,30,.92); }
+  .dock { position: absolute; left: 50%; bottom: 52px; transform: translateX(-50%); display: flex; align-items: flex-end; justify-content: center; width: 340px; height: 120px; }
+  .bar { position: absolute; bottom: 0; left: 50%; height: 44px; width: 44px; transform: translateX(-50%); border-radius: var(--radius-capsule);
+    background: var(--color-surface); box-shadow: var(--shadow-float), inset 0 1px 0 rgba(255,255,255,.07), 0 0 0 1px #2c2c31;
+    transition: width var(--duration-enter) var(--ease-out), height var(--duration-enter) var(--ease-out), background var(--duration-enter) var(--ease-colour); }
+  .bar.idle { width: 44px; height: 6px; background: #4a4a50; box-shadow: none; }
+  .bar .items { position: absolute; inset: 0; display: flex; align-items: center; padding: 0 4px; opacity: 1; transition: opacity 120ms var(--ease-colour) 80ms; }
+  .bar.idle .items { opacity: 0; transition-delay: 0ms; pointer-events: none; }
+  .bar .dot { position: absolute; top: 4px; width: 36px; height: 36px; border-radius: 50%; background: var(--color-select); opacity: 0;
+    transition: transform var(--duration-move) var(--ease-out), opacity var(--duration-hover) var(--ease-colour), width var(--duration-move) var(--ease-out), border-radius var(--duration-move) var(--ease-out); }
+  .bar .ib { position: relative; z-index: 1; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; background: none; color: var(--color-text-dim); font-size: 14px;
+    transition: color var(--duration-move) var(--ease-colour); }
+  .bar .ib.hot { color: var(--color-select-contrast); }
+  .bar .sep { width: 1px; height: 18px; background: var(--color-border); margin: 0 6px; }
+  .bar .paste { width: auto; padding: 0 12px 0 10px; display: flex; gap: 8px; border-radius: var(--radius-capsule); font-family: var(--font-body); font-size: var(--text-body); }
+  .bar .paste .i { font-size: 14px; }
+  .tip { position: absolute; bottom: 54px; left: 0; white-space: nowrap; background: var(--color-surface); border-radius: var(--radius-control); padding: 5px 10px; font-size: var(--text-caption);
+    box-shadow: 0 0 0 1px #2c2c31, var(--shadow-float); opacity: 0; transform: translateY(4px);
+    transition: opacity var(--duration-hover) var(--ease-colour), transform var(--duration-hover) var(--ease-out), left var(--duration-move) var(--ease-out); pointer-events: none; }
+  .tip.on { opacity: 1; transform: none; }
+  .rec { position: absolute; bottom: 52px; right: 40px; height: 40px; border-radius: var(--radius-capsule); background: var(--color-surface); display: flex; align-items: center; gap: 10px; padding: 0 16px;
+    box-shadow: var(--shadow-float), inset 0 1px 0 rgba(255,255,255,.07), 0 0 0 1px #2c2c31; }
+  .rec .r { width: 8px; height: 8px; border-radius: 50%; background: var(--color-recording); animation: pulse 1.2s ease-in-out infinite; }
+  .rec .w { display: flex; gap: 2.5px; align-items: center; height: 22px; }
+  .rec .w i { width: 2.5px; border-radius: 2px; background: var(--color-text); animation: wav 0.9s ease-in-out infinite; }
+  @keyframes pulse { 50% { transform: scale(1.35); } }
+  @keyframes wav { 0%,100% { height: 3px; } 50% { height: var(--h); } }
+  .hint { position: absolute; top: 14px; left: 16px; color: rgba(255,255,255,.6); font-size: var(--text-caption); }
+
+  /* ---------- reference bits ---------- */
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: var(--space-2); }
+  .sw { background: var(--color-surface); border-radius: var(--radius-card); padding: var(--space-2); }
+  .sw i { display: block; height: 36px; border-radius: var(--radius-control); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); margin-bottom: var(--space-2); }
+  .sw b { display: block; font-size: var(--text-caption); font-weight: var(--weight-semibold); }
+  .sw small { font-size: 11px; color: var(--color-text-muted); }
   .wrap { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
-  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+  .note { color: var(--color-text-muted); font-size: var(--text-caption); margin-top: var(--space-2); }
+
+  @media (max-width: 760px) { .nav { width: 150px; } .stat b { font-size: 18px; } .head { padding-left: var(--space-4); } }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation-duration: 0s !important; animation-iteration-count: 1 !important; } }
 </style>
 </head>
 <body>
 <main>
-  <h1>LocalFlow design system</h1>
-  <p>Direction 1, Fluent Graphite. Every value on this page comes from <code>tokens.css</code>; localflow.py mirrors them in its <code>T</code>, <code>F</code> and <code>SPACE</code> tables.</p>
+  <h1>Graphite Capsule</h1>
+  <p class="lede">LocalFlow's design direction 2. A quiet, smoky graphite tool where white means "active" and everything you can touch is a capsule. Everything on this page is live: hover, click and tab through it. All values come from <code>tokens.css</code>.</p>
 
-  <h2>Colour</h2>
-  <div class="swatches">
-    <div class="sw"><i style="background:var(--color-bg)"></i><b>bg #1f1f1f</b><small>Window background, row dividers</small></div>
-    <div class="sw"><i style="background:var(--color-nav)"></i><b>nav #1a1a1a</b><small>Settings sidebar</small></div>
-    <div class="sw"><i style="background:var(--color-surface)"></i><b>surface #2b2b2b</b><small>Groups, cards, popups, hover bar</small></div>
-    <div class="sw"><i style="background:var(--color-control)"></i><b>control #383838</b><small>Buttons, inputs, key chips</small></div>
-    <div class="sw"><i style="background:var(--color-text)"></i><b>text #f3f3f3</b><small>Titles and body</small></div>
-    <div class="sw"><i style="background:var(--color-text-muted)"></i><b>text-muted #a8a8a8</b><small>Descriptions, captions</small></div>
-    <div class="sw"><i style="background:var(--color-accent)"></i><b>accent #60cdff</b><small>On switches, primary button, selected nav, mic tick. Nothing else.</small></div>
-    <div class="sw"><i style="background:var(--color-recording)"></i><b>recording #ff6b6b</b><small>The recording dot only</small></div>
+  <h2>Hover bar: the signature element</h2>
+  <p class="lede">Point at the idle pill. The bar grows out of it, a white circle slides under the icon you point at, and the icon turns dark.</p>
+  <div class="desk" id="desk">
+    <div class="hint">Desktop · move the pointer onto the small bar</div>
+    <div class="dock" id="dock">
+      <div class="tip" id="tip">Scratchpad</div>
+      <div class="bar idle" id="bar">
+        <div class="dot" id="dot"></div>
+        <div class="items">
+          <button class="ib i" data-tip="Scratchpad" aria-label="Scratchpad">&#xE70B;</button>
+          <button class="ib i" data-tip="Settings &amp; history" aria-label="Settings">&#xE713;</button>
+          <button class="ib i" data-tip="Microphone · Realtek Array" aria-label="Microphone">&#xE720;</button>
+          <span class="sep"></span>
+          <button class="ib paste" data-tip="Recent transcripts · Ctrl+Alt+V"><span class="i">&#xE77F;</span>Paste last</button>
+        </div>
+      </div>
+    </div>
+    <div class="rec" aria-label="Recording">
+      <span class="r"></span>
+      <span class="w" id="wave"></span>
+    </div>
+    <div class="taskbar"></div>
   </div>
 
-  <h2>Type</h2>
-  <div class="type">
-    <div style="font-family:var(--font-display);font-size:var(--text-title);font-weight:600">Title 20 · General</div>
-    <div style="font-size:var(--text-subtitle);font-weight:600">Subtitle 14 · Dictation</div>
-    <div style="font-size:var(--text-body)">Body 13 · Remove filler words</div>
-    <div style="font-size:var(--text-caption);color:var(--color-text-muted)">Caption 12 · Drops "um" and "uh"</div>
+  <h2>Settings</h2>
+  <p class="lede">Pick a page in the sidebar: the capsule slides there. Toggle switches, try the engine segment, hover rows. The stats corner sits at the bottom of the sidebar.</p>
+  <div class="stage">
+    <div class="window settings entering">
+      <aside class="nav">
+        <div class="brand"><span class="mark i">&#xE720;</span>LocalFlow</div>
+        <div class="navlist" id="navlist">
+          <div class="cap" id="cap"></div>
+          <button class="navitem" aria-current="page" data-page="general"><span class="i">&#xE713;</span>General</button>
+          <button class="navitem" data-page="mic"><span class="i">&#xE720;</span>Microphone</button>
+          <button class="navitem" data-page="dict"><span class="i">&#xE82D;</span>Dictionary</button>
+          <button class="navitem" data-page="hist"><span class="i">&#xE81C;</span>History</button>
+        </div>
+        <div class="stats">
+          <div class="stat" style="--bar: var(--color-stat-1)"><b>109</b><small>words today</small></div>
+          <div class="stat" style="--bar: var(--color-stat-2)"><b>104</b><small>wpm</small></div>
+          <div class="stat wide" style="--bar: var(--color-stat-3)"><b>~2 min</b><small>saved today</small></div>
+        </div>
+        <div class="navfoot"><button class="btn">Restart</button><button class="btn sub">Quit</button></div>
+      </aside>
+      <section class="main">
+        <div class="head"><h3 id="ptitle">General</h3><button class="btn sub icon" aria-label="Pin">&#xE718;</button><button class="btn sub icon" aria-label="Close">&#xE8BB;</button></div>
+        <div class="scroll"><div class="page" id="page"></div></div>
+      </section>
+    </div>
   </div>
 
-  <h2>Spacing</h2>
-  <div class="ruler">
-    <div><span style="width:var(--space-1)"></span>space-1 · 4</div>
-    <div><span style="width:var(--space-2)"></span>space-2 · 8</div>
-    <div><span style="width:var(--space-3)"></span>space-3 · 12</div>
-    <div><span style="width:var(--space-4)"></span>space-4 · 16</div>
-    <div><span style="width:var(--space-6)"></span>space-6 · 24</div>
+  <h2>Scratchpad</h2>
+  <p class="lede">The writing area is the card itself, no box-in-a-box. Focus gives it a soft ice-blue edge. "Copy all" confirms with a green check, then turns back.</p>
+  <div class="stage">
+    <div class="window notes entering">
+      <div class="head"><h3>Scratchpad</h3><button class="btn sub icon" aria-label="Pin">&#xE718;</button><button class="btn sub icon" aria-label="Close">&#xE8BB;</button></div>
+      <div class="sub-l">Saves as you type. Dictating while it's open types here.</div>
+      <textarea id="ta">Launch checklist
+- Pricing page copy
+- Beta invite list
+- Release notes draft
+
+Ideas
+- Weekly digest email
+- Keyboard shortcut cheat sheet</textarea>
+      <div class="foot"><span class="status" id="saved">Saved 14:02</span>
+        <button class="btn copy" id="copy"><span class="ok i">&#xE73E;</span> <span class="lbl-copy">Copy all</span><span class="lbl-done">Copied</span></button>
+        <button class="btn sub">Open file</button></div>
+    </div>
   </div>
 
   <h2>Components</h2>
   <div class="wrap">
-    <button class="pri">Paste</button><button class="std">Copy</button><button class="sub">Fix</button>
-    <button class="std" disabled>Disabled</button>
+    <button class="btn pri">Paste</button><button class="btn">Copy</button><button class="btn sub">Fix</button><button class="btn" disabled>Disabled</button>
     <span class="key">Right Ctrl</span>
+    <button class="switch" role="switch" aria-checked="true" aria-label="Example on"></button>
+    <button class="switch" role="switch" aria-checked="false" aria-label="Example off"></button>
     <input placeholder="Heard as">
   </div>
-  <h2>Setting group</h2>
-  <div class="group">
-    <div class="row"><div class="t">Hold to talk<small>Double-tap for hands-free · Esc cancels</small></div><span class="key">Right Ctrl</span><button class="std">Change</button></div>
-    <div class="row"><div class="t">Remove filler words<small>Drops "um" and "uh"</small></div><button class="switch" aria-label="Remove filler words: on"></button></div>
-    <div class="row"><div class="t">AI cleanup<small>Fixes grammar with Ollama · adds 1–3 s</small></div><button class="switch off" aria-label="AI cleanup: off"></button></div>
+  <p class="note">Radius by role: key cap 6 · button and input 8 · card 12 · capsules fully round. Press a button: it dips to 97%. Hold a switch: the knob stretches.</p>
+
+  <h2>Colour</h2>
+  <div class="swatches">
+    <div class="sw"><i style="background:var(--color-bg)"></i><b>bg #161618</b><small>Window background</small></div>
+    <div class="sw"><i style="background:var(--color-nav)"></i><b>nav #111113</b><small>Settings sidebar</small></div>
+    <div class="sw"><i style="background:var(--color-surface)"></i><b>surface #1f1f22</b><small>Cards, popups, hover bar</small></div>
+    <div class="sw"><i style="background:var(--color-control)"></i><b>control #2a2a2e</b><small>Buttons, inputs, key caps</small></div>
+    <div class="sw"><i style="background:var(--color-select)"></i><b>select #ededee</b><small>White = active: ON, selected, primary</small></div>
+    <div class="sw"><i style="background:var(--color-text-muted)"></i><b>muted #9c9ca4</b><small>Descriptions · 6.0:1 on surface</small></div>
+    <div class="sw"><i style="background:var(--color-accent)"></i><b>accent #9cc3e6</b><small>Focus edge, mic tick, listening dot</small></div>
+    <div class="sw"><i style="background:var(--color-recording)"></i><b>recording #ff6b5b</b><small>Recording dot only</small></div>
+    <div class="sw"><i style="background:linear-gradient(90deg,var(--color-stat-1) 33%,var(--color-stat-2) 33% 66%,var(--color-stat-3) 66%)"></i><b>stat 1 · 2 · 3</b><small>Stats corner bars</small></div>
+    <div class="sw"><i style="background:var(--color-success)"></i><b>success #8fd3a6</b><small>"Copied" check</small></div>
   </div>
-  <h2>Motion</h2>
-  <p>Hover the buttons above: colour changes over <code>--duration-fast</code> (80 ms), nothing moves. The recording pill's waveform is the only animation in the app.</p>
+
+  <h2>Type</h2>
+  <div style="font-family:var(--font-display);font-size:var(--text-title);font-weight:600">Title 22 · General</div>
+  <div style="font-size:var(--text-subtitle);font-weight:600;color:var(--color-text-muted)">Group heading 13 · Dictation</div>
+  <div style="font-size:var(--text-body)">Body 13 · Remove filler words</div>
+  <div style="font-size:var(--text-caption);color:var(--color-text-muted)">Caption 12 · Drops "um" and "uh"</div>
 </main>
+
+<template id="general">
+  <div class="group-title">Dictation</div>
+  <div class="card lit">
+    <div class="row"><div class="t">Hold to talk<small>Double-tap for hands-free · Esc cancels</small></div><span class="key">Right Ctrl</span><button class="btn">Change</button></div>
+    <div class="row"><div class="t">Recent transcripts<small>Shows your last 9 to paste again</small></div><span class="key">Ctrl+Alt+V</span><button class="btn">Change</button></div>
+  </div>
+  <div class="group-title">Wake word</div>
+  <div class="card lit">
+    <div class="row"><div class="t">Start with your voice<small>Say "Hey Jarvis", wait for the chime, then talk</small></div><button class="switch" role="switch" aria-checked="false" aria-label="Start with your voice"></button></div>
+    <div class="row"><div class="t">Wake phrase<small>Two short words work best</small></div><input value="Hey Jarvis" size="12"><button class="btn">Save</button></div>
+  </div>
+  <div class="group-title">Text</div>
+  <div class="card lit">
+    <div class="row"><div class="t">Remove filler words<small>Drops "um" and "uh"</small></div><button class="switch" role="switch" aria-checked="true" aria-label="Remove filler words"></button></div>
+    <div class="row"><div class="t">Voice commands<small>Say "new line" or "new paragraph"</small></div><button class="switch" role="switch" aria-checked="true" aria-label="Voice commands"></button></div>
+    <div class="row"><div class="t">AI cleanup<small>Fixes grammar with Ollama · adds 1–3 s</small></div><button class="switch" role="switch" aria-checked="false" aria-label="AI cleanup"></button></div>
+  </div>
+  <div class="group-title">Speech engine</div>
+  <div class="card lit">
+    <div class="row"><div class="t">Engine<small>Parakeet is fastest on this PC</small></div>
+      <div class="seg" role="group" aria-label="Engine"><span class="thumb"></span><button aria-pressed="false">Whisper</button><button aria-pressed="true">Parakeet</button></div></div>
+  </div>
+</template>
+<template id="mic">
+  <div class="group-title">Input</div>
+  <div class="card lit">
+    <div class="row click"><div class="t">Automatic<small>Best available · now Realtek Array</small></div><span class="i" style="color:var(--color-accent);font-size:14px">&#xE73E;</span></div>
+    <div class="row click"><div class="t">Realtek Array<small>Built-in</small></div></div>
+    <div class="row click"><div class="t">AirPods Pro<small>Not connected</small></div></div>
+  </div>
+  <div class="group-title">Startup</div>
+  <div class="card lit">
+    <div class="row"><div class="t">Keep the mic ready for a minute<small>No cut-off first words</small></div><button class="switch" role="switch" aria-checked="true" aria-label="Keep mic ready"></button></div>
+  </div>
+</template>
+<template id="dict">
+  <div class="group-title">Add a word</div>
+  <div class="card lit"><div class="row" style="gap:8px"><input placeholder="Heard as" style="flex:1;min-width:0"><span class="i" style="color:var(--color-text-muted)">&#xE76C;</span><input placeholder="Should be" style="flex:1;min-width:0"><button class="btn pri">Add</button></div></div>
+  <div class="group-title">Active · 2</div>
+  <div class="card lit">
+    <div class="row"><div class="t">adarsh → Adarsh<small>Everywhere</small></div><button class="btn sub">Turn off</button><button class="btn sub icon" aria-label="Delete">&#xE74D;</button></div>
+    <div class="row"><div class="t">local flow → LocalFlow<small>Everywhere</small></div><button class="btn sub">Turn off</button><button class="btn sub icon" aria-label="Delete">&#xE74D;</button></div>
+  </div>
+</template>
+<template id="hist">
+  <div class="group-title">Your last 9 dictations</div>
+  <div class="card lit" style="margin-bottom:8px"><div class="row" style="align-items:flex-start;flex-direction:column;gap:6px">
+    <div style="display:flex;gap:8px;align-items:center;width:100%"><span class="key">1</span><small style="flex:1;margin:0">Today 14:02</small><button class="btn sub">Fix</button><button class="btn">Copy</button><button class="btn pri">Paste</button></div>
+    <div>Can you send me the release notes draft before the review tomorrow?</div></div></div>
+  <div class="card lit"><div class="row" style="align-items:flex-start;flex-direction:column;gap:6px">
+    <div style="display:flex;gap:8px;align-items:center;width:100%"><span class="key">2</span><small style="flex:1;margin:0">Today 13:47</small><button class="btn sub">Fix</button><button class="btn">Copy</button><button class="btn pri">Paste</button></div>
+    <div>Add the keyboard shortcut cheat sheet to the ideas list.</div></div></div>
+</template>
+
+<script>
+  const titles = { general: "General", mic: "Microphone", dict: "Dictionary", hist: "History" };
+  const page = document.getElementById("page"), cap = document.getElementById("cap");
+
+  function wire(root) {
+    root.querySelectorAll(".switch").forEach(s => s.onclick = () => s.setAttribute("aria-checked", s.getAttribute("aria-checked") !== "true"));
+    root.querySelectorAll(".seg").forEach(seg => {
+      const thumb = seg.querySelector(".thumb"), btns = [...seg.querySelectorAll("button")];
+      const place = b => { thumb.style.left = b.offsetLeft + "px"; thumb.style.width = b.offsetWidth + "px"; };
+      btns.forEach(b => b.onclick = () => { btns.forEach(x => x.setAttribute("aria-pressed", x === b)); place(b); });
+      requestAnimationFrame(() => place(btns.find(b => b.getAttribute("aria-pressed") === "true")));
+    });
+  }
+  function show(name) {
+    page.innerHTML = ""; page.append(document.getElementById(name).content.cloneNode(true));
+    page.style.animation = "none"; page.offsetHeight; page.style.animation = "";
+    document.getElementById("ptitle").textContent = titles[name];
+    wire(page);
+  }
+  const items = [...document.querySelectorAll(".navitem")];
+  items.forEach(it => it.onclick = () => {
+    items.forEach(x => x.removeAttribute("aria-current")); it.setAttribute("aria-current", "page");
+    cap.style.transform = `translateY(${it.offsetTop}px)`; show(it.dataset.page);
+  });
+  show("general"); wire(document.querySelector(".wrap"));
+
+  // scratchpad copy confirmation
+  const copy = document.getElementById("copy");
+  copy.onclick = () => { copy.classList.remove("done"); copy.offsetWidth; copy.classList.add("done");
+    clearTimeout(copy.t); copy.t = setTimeout(() => copy.classList.remove("done"), 1400); };
+  document.getElementById("ta").oninput = () => { const s = document.getElementById("saved"); s.textContent = "Saving…";
+    clearTimeout(s.t); s.t = setTimeout(() => s.textContent = "Saved " + new Date().toTimeString().slice(0, 5), 600); };
+
+  // hover bar
+  const bar = document.getElementById("bar"), dock = document.getElementById("dock"), dot = document.getElementById("dot"), tip = document.getElementById("tip");
+  const fullW = 236;
+  dock.onmouseenter = () => { bar.classList.remove("idle"); bar.style.width = fullW + "px"; };
+  dock.onmouseleave = () => { bar.classList.add("idle"); bar.style.width = ""; dot.style.opacity = 0; tip.classList.remove("on");
+    bar.querySelectorAll(".ib").forEach(b => b.classList.remove("hot")); };
+  bar.querySelectorAll(".ib").forEach(b => {
+    b.onmouseenter = () => {
+      bar.querySelectorAll(".ib").forEach(x => x.classList.toggle("hot", x === b));
+      dot.style.width = b.offsetWidth + "px"; dot.style.borderRadius = b.offsetWidth > 40 ? "999px" : "50%";
+      dot.style.transform = `translateX(${b.offsetLeft}px)`; dot.style.opacity = 1;
+      tip.textContent = b.dataset.tip; tip.classList.add("on");
+      const barLeft = bar.offsetLeft - fullW / 2;
+      tip.style.left = Math.max(0, barLeft + b.offsetLeft + b.offsetWidth / 2 - tip.offsetWidth / 2) + "px";
+    };
+  });
+
+  // recording waveform
+  const wave = document.getElementById("wave");
+  for (let i = 0; i < 22; i++) { const s = document.createElement("i"); s.style.setProperty("--h", (6 + Math.abs(Math.sin(i * 1.7)) * 16) + "px"); s.style.animationDelay = (i * -0.07) + "s"; wave.append(s); }
+</script>
 </body>
 </html>

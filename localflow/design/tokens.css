@@ -1,28 +1,34 @@
-/* LocalFlow design tokens: direction 1, "Fluent Graphite".
-   Single source of truth. localflow.py mirrors these in its THEME / TYPE / SPACE
-   tables; change a value here first, then there. */
+/* LocalFlow design tokens: direction 2, "Graphite Capsule".
+   Single source of truth. localflow.py mirrors these in its T / F / SPACE / RADIUS /
+   MOTION tables; change a value here first, then there. */
 :root {
-  /* Color, by role */
-  --color-bg: #1f1f1f;             /* window background */
-  --color-nav: #1a1a1a;            /* sidebar */
-  --color-surface: #2b2b2b;        /* setting groups, cards, popups, the hover bar */
-  --color-surface-hover: #323232;  /* hovered row / nav item */
-  --color-control: #383838;        /* buttons, inputs, key chips, selects */
-  --color-control-hover: #404040;
-  --color-control-active: #2f2f2f;
-  --color-border: #454545;         /* control outlines */
-  --color-divider: #1f1f1f;        /* lines between rows inside a group (= bg) */
-  --color-text: #f3f3f3;
-  --color-text-muted: #a8a8a8;     /* descriptions, captions (AA on surface: 6.6:1) */
-  --color-text-disabled: #6e6e6e;
-  --color-accent: #60cdff;         /* ON switches, primary button, selected-nav marker, focus-free selection */
-  --color-accent-hover: #7ad6ff;
-  --color-accent-active: #4cb6e6;
-  --color-accent-contrast: #00263a;/* text/knob placed on the accent */
+  /* Colour, by role. Smoky graphite with a faint cool cast; white is the "selected" colour. */
+  --color-bg: #161618;             /* window background */
+  --color-nav: #111113;            /* sidebar, a step darker than the page */
+  --color-surface: #1f1f22;        /* cards, popups, the hover bar */
+  --color-surface-hover: #27272b;  /* hovered row / nav item */
+  --color-control: #2a2a2e;        /* buttons, inputs, key caps, switch track (off) */
+  --color-control-hover: #333338;
+  --color-control-active: #232327;
+  --color-border: #34343a;         /* control outlines */
+  --color-edge: #3e3e45;           /* the lit top edge of cards and popups */
+  --color-edge-glow: #55555d;      /* centre of a lit edge / divider; fades to transparent at both ends */
+  --color-divider: #2b2b30;        /* lines between rows; fade out at both ends */
+  --color-text: #f2f2f3;
+  --color-text-muted: #9c9ca4;     /* descriptions (AA on surface: 6.0:1) */
+  --color-text-dim: #c9c9ce;       /* idle icons and labels */
+  --color-text-disabled: #5e5e66;
+  --color-select: #ededee;         /* selected capsule, ON switch, primary button: "white means active" */
+  --color-select-hover: #ffffff;
+  --color-select-contrast: #161618;/* text, icon or knob placed on white */
+  --color-accent: #9cc3e6;         /* muted ice blue: focus glow on inputs, mic tick, listening dot, stat bar */
   --color-focus: #ffffff;          /* keyboard focus ring */
-  --color-recording: #ff6b6b;      /* recording dot only */
-  --color-danger: #ff99a4;
-  --color-success: #6ccb5f;
+  --color-recording: #ff6b5b;      /* recording dot only */
+  --color-danger: #ff9a92;
+  --color-success: #8fd3a6;        /* "Copied" checkmark */
+  --color-stat-1: #9cc3e6;         /* stats corner bars: words, wpm, time saved */
+  --color-stat-2: #d9bb85;
+  --color-stat-3: #8fd3a6;
 
   /* Type: Segoe UI Variable (Windows 11), Segoe UI fallback */
   --font-display: "Segoe UI Variable Display", "Segoe UI", sans-serif;
@@ -30,8 +36,9 @@
   --font-icon: "Segoe Fluent Icons", "Segoe MDL2 Assets";
   --text-caption: 12px;   /* descriptions, meta */
   --text-body: 13px;      /* setting titles, body */
-  --text-subtitle: 14px;  /* group headings (semibold) */
-  --text-title: 20px;     /* page title (display semibold) */
+  --text-subtitle: 13px;  /* group headings (semibold, muted) */
+  --text-title: 22px;     /* page title (display semibold) */
+  --text-stat: 22px;      /* stats corner numbers (display semibold) */
   --weight-regular: 400;
   --weight-semibold: 600;
 
@@ -40,17 +47,25 @@
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
+  --space-5: 20px;
   --space-6: 24px;
 
-  /* Radius by role */
-  --radius-control: 4px;  /* buttons, inputs, chips, nav items */
-  --radius-group: 6px;    /* setting groups, cards */
-  --radius-window: 8px;   /* popups, the hover bar */
-  --radius-switch: 10px;
+  /* Radius by role. Small things are rounder relative to their size. */
+  --radius-chip: 6px;       /* key caps */
+  --radius-control: 8px;    /* buttons, inputs */
+  --radius-card: 12px;      /* setting groups, transcript cards */
+  --radius-window: 8px;     /* popups and settings: Windows 11 draws this, we can't change it */
+  --radius-capsule: 999px;  /* nav selection, hover bar, pill, switches, segmented control */
 
-  /* Elevation: only popups get a border-shadow; nothing else */
-  --shadow-popup: 0 8px 24px rgba(0, 0, 0, .45);
+  /* Elevation: only the floating pill and hover bar cast a shadow; cards use a lit edge instead */
+  --shadow-float: 0 6px 18px rgba(0, 0, 0, .5);
 
-  /* Motion: hover colour changes only, no movement */
-  --duration-fast: 80ms;
+  /* Motion, named by intent */
+  --duration-hover: 120ms;   /* colour fades on hover/press */
+  --duration-move: 200ms;    /* switch knob, nav capsule, hover-bar circle */
+  --duration-enter: 220ms;   /* window fade + rise, hover bar growing out of the pill */
+  --duration-confirm: 1400ms;/* how long "Copied" stays before it turns back */
+  --ease-out: cubic-bezier(.22, 1, .36, 1);        /* movement: fast start, soft landing */
+  --ease-colour: cubic-bezier(.4, 0, .2, 1);       /* colour and opacity */
+  --rise-distance: 8px;      /* how far windows rise as they appear */
 }

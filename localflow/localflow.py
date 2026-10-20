@@ -8,6 +8,7 @@ cleanup runs through a local Ollama model. Settings live in config.json.
 import ctypes
 import ctypes.wintypes
 import difflib
+import functools
 import json
 import math
 import os
@@ -57,7 +58,7 @@ import pyperclip
 import pystray
 import requests
 import sounddevice as sd
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 SR = 16000
 FRAME = 800  # 50 ms analysis frames
@@ -1212,19 +1213,23 @@ class HoldKey:
 
 # ---------------------------------------------------------------- overlay UI
 #
-# Look and feel: design/tokens.css and design/design-brief.md ("Fluent Graphite").
-# Every colour, font and spacing value below comes from those tokens.
+# Look and feel: design/tokens.css and design/design-brief.md ("Graphite Capsule").
+# Every colour, font, spacing, radius and motion value below comes from those tokens.
 
 T = {
-    "bg": "#1f1f1f", "nav": "#1a1a1a", "surface": "#2b2b2b", "surface_hover": "#323232",
-    "control": "#383838", "control_hover": "#404040", "control_active": "#2f2f2f",
-    "border": "#454545", "divider": "#1f1f1f", "text": "#f3f3f3", "muted": "#a8a8a8",
-    "disabled": "#6e6e6e", "accent": "#60cdff", "accent_hover": "#7ad6ff",
-    "accent_active": "#4cb6e6", "accent_contrast": "#00263a", "focus": "#ffffff",
-    "recording": "#ff6b6b", "danger": "#ff99a4", "popup_border": "#3d3d3d",
+    "bg": "#161618", "nav": "#111113", "surface": "#1f1f22", "surface_hover": "#27272b",
+    "control": "#2a2a2e", "control_hover": "#333338", "control_active": "#232327",
+    "border": "#34343a", "edge": "#3e3e45", "edge_glow": "#55555d", "divider": "#2b2b30",
+    "text": "#f2f2f3", "muted": "#9c9ca4", "dim": "#c9c9ce", "disabled": "#5e5e66",
+    "select": "#ededee", "select_hover": "#ffffff", "select_contrast": "#161618",
+    "accent": "#9cc3e6", "focus": "#ffffff", "recording": "#ff6b5b", "danger": "#ff9a92",
+    "success": "#8fd3a6", "stat1": "#9cc3e6", "stat2": "#d9bb85", "stat3": "#8fd3a6",
+    "popup_border": "#2a2a2f", "idle_pill": "#4a4a50", "selection": "#2f4a63",
 }
 KEY = "#010203"  # transparent colour key for the pill and the hover bar
-SPACE = {1: 4, 2: 8, 3: 12, 4: 16, 6: 24}
+SPACE = {1: 4, 2: 8, 3: 12, 4: 16, 5: 20, 6: 24}
+RADIUS = {"chip": 6, "control": 8, "card": 12}
+MOTION = {"hover": 120, "move": 200, "enter": 220, "confirm": 1400, "rise": 8}
 F = {}           # fonts, filled by init_fonts()
 S = 1.0          # display scale (125% -> 1.25)
 
@@ -1241,12 +1246,17 @@ def init_fonts(root):
     S = root.winfo_fpixels("1i") / 96
     have = set(tkfont.families(root))
     pick = lambda *names: next((n for n in names if n in have), "Segoe UI")
+    strong = pick("Segoe UI Variable Text Semibold", "Segoe UI Semibold")
+    display = pick("Segoe UI Variable Display Semib", "Segoe UI Semibold")
     F.update({
         "caption": (pick("Segoe UI Variable Small", "Segoe UI"), 9),
+        "small": (pick("Segoe UI Variable Small", "Segoe UI"), 8),
         "body": (pick("Segoe UI Variable Text", "Segoe UI"), 10),
-        "body_strong": (pick("Segoe UI Variable Text Semibold", "Segoe UI Semibold"), 10),
-        "subtitle": (pick("Segoe UI Variable Text Semibold", "Segoe UI Semibold"), 11),
-        "title": (pick("Segoe UI Variable Display Semib", "Segoe UI Semibold"), 15),
+        "body_strong": (strong, 10),
+        "heading": (strong, 10),          # group headings, in muted
+        "subtitle": (strong, 11),         # popup titles
+        "title": (display, 16),           # page titles
+        "stat": (display, 16),            # stats corner numbers
         "icon": (pick("Segoe Fluent Icons", "Segoe MDL2 Assets"), 11),
         "icon_small": (pick("Segoe Fluent Icons", "Segoe MDL2 Assets"), 9),
         "mono": (pick("Cascadia Mono", "Consolas"), 9),
@@ -1255,6 +1265,182 @@ def init_fonts(root):
 
 def px(v):
     return int(round(v * S))
+
+
+# ---------------------------------------------------------------------- motion
+
+def animations_on():
+    """Windows' "Animation effects" switch (Accessibility > Visual effects)."""
+    on = ctypes.c_int(1)
+    try:
+        user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(on), 0)  # SPI_GETCLIENTAREAANIMATION
+    except Exception:
+        pass
+    return bool(on.value)
+
+
+def ease_out(t):     # --ease-out: fast start, soft landing
+    return 1 - (1 - t) ** 4
+
+
+def ease_colour(t):  # --ease-colour
+    return t * t * (3 - 2 * t)
+
+
+class Tween:
+    """Moves one number toward a target over a few frames. Retargeting mid-way carries
+    on from where it is; nothing is scheduled once it arrives."""
+
+    FRAME = 15  # ms
+
+    def __init__(self, widget, apply, value=0.0):
+        self.widget, self.apply, self.value = widget, apply, value
+        self.target, self.job = value, None
+
+    def _cancel(self):
+        if self.job:
+            self.widget.after_cancel(self.job)
+            self.job = None
+
+    def set(self, value):
+        self._cancel()
+        self.value = self.target = value
+        self.apply(value)
+
+    def to(self, target, ms=None, ease=ease_out, done=None):
+        ms = MOTION["move"] if ms is None else ms
+        self._cancel()
+        self.target = target
+        if ms <= 0 or target == self.value or not animations_on():
+            self.value = target
+            self.apply(target)
+            if done:
+                done()
+            return
+        start, t0 = self.value, time.perf_counter()
+
+        def step():
+            k = min(1.0, (time.perf_counter() - t0) * 1000 / ms)
+            self.value = start + (target - start) * ease(k)
+            try:
+                self.apply(self.value)
+            except tk.TclError:  # widget destroyed mid-animation
+                self.job = None
+                return
+            if k < 1:
+                self.job = self.widget.after(self.FRAME, step)
+            else:
+                self.job = None
+                if done:
+                    done()
+
+        step()
+
+
+class Redraw:
+    """Coalesces several tweens into one draw per frame."""
+
+    def __init__(self, widget, draw):
+        self.widget, self.draw, self.job = widget, draw, None
+
+    def __call__(self, _=None):
+        if not self.job:
+            self.job = self.widget.after_idle(self._run)
+
+    def _run(self):
+        self.job = None
+        try:
+            self.draw()
+        except tk.TclError:
+            pass
+
+
+def rgb(c):
+    return tuple(int(c[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def mix(a, b, t):
+    t = max(0.0, min(1.0, t))
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in zip(rgb(a), rgb(b)))
+
+
+# --------------------------------------------------------- smooth (AA) shapes
+# tk's canvas can't anti-alias, so rounded shapes are drawn 4x larger with PIL,
+# scaled down, and shown as images. Widgets keep a reference to the image they show,
+# so the cache can drop it without the shape vanishing.
+
+def _shape(w, h, r, fill, outline, width, edge):
+    ss = 4 if w * h < 60000 else 2
+    W, H = w * ss, h * ss
+    im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    rr = min(r, w / 2, h / 2) * ss
+    if outline:
+        d.rounded_rectangle((0, 0, W - 1, H - 1), rr, fill=rgb(outline) + (255,))
+        i = width * ss
+        d.rounded_rectangle((i, i, W - 1 - i, H - 1 - i), max(0, rr - i),
+                            fill=rgb(fill) + (255,) if fill else (0, 0, 0, 0))
+    elif fill:
+        d.rounded_rectangle((0, 0, W - 1, H - 1), rr, fill=rgb(fill) + (255,))
+    im = im.resize((w, h), Image.BOX)
+    if edge and w > 8:  # the lit top edge: brightest in the middle, gone by 10% from each end
+        a = np.asarray(im).copy()
+        u = np.clip((np.arange(w) - 0.1 * w) / (0.8 * w), 0, 1)
+        al = (np.sin(np.pi * u) * (a[0, :, 3] / 255))[:, None]
+        a[0, :, :3] = (a[0, :, :3] * (1 - al) + np.array(rgb(edge)) * al).astype(np.uint8)
+        im = Image.fromarray(a, "RGBA")
+    return im
+
+
+@functools.lru_cache(maxsize=400)
+def shape(w, h, r, fill, outline="", width=1, edge=""):
+    """Rounded rectangle (or capsule/circle when r >= h/2) as a PhotoImage."""
+    return ImageTk.PhotoImage(_shape(max(1, int(w)), max(1, int(h)), r, fill, outline, width, edge))
+
+
+ICON_FILES = [os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", f)
+              for f in ("SegoeIcons.ttf", "segmdl2.ttf")]
+
+
+@functools.lru_cache(maxsize=8)
+def _icon_font(size_px):
+    path = next((f for f in ICON_FILES if os.path.exists(f)), None)
+    return ImageFont.truetype(path, size_px) if path else None
+
+
+@functools.lru_cache(maxsize=256)
+def glyph(ch, pt, color):
+    """An icon rendered with greyscale smoothing. tk draws text with ClearType, which
+    fringes dark icons red/blue on light backgrounds (the white hover-bar circle)."""
+    font = _icon_font(px(pt * 96 / 72))
+    if font is None:
+        return None
+    size = px(pt * 96 / 72 * 1.5)
+    im = Image.new("RGBA", (size, size), rgb(color) + (0,))
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).text((size / 2, size / 2), ch, font=font, fill=255, anchor="mm")
+    im.putalpha(mask)
+    return ImageTk.PhotoImage(im)
+
+
+def icon(c, x, y, ch, color, pt=11):
+    """Draw an icon centred on (x, y)."""
+    img = glyph(ch, pt, color)
+    if img is None:
+        return c.create_text(x, y, text=ch, font=F["icon"], fill=color)
+    return put(c, x, y, img, anchor="center")
+
+
+@functools.lru_cache(maxsize=64)
+def fade_line(w, color):
+    """1 px line that fades out toward both ends (row dividers)."""
+    w = max(1, int(w))
+    u = np.arange(w) / max(1, w - 1)
+    alpha = np.clip(np.minimum(u, 1 - u) / 0.12, 0, 1) * 255
+    a = np.zeros((1, w, 4), np.uint8)
+    a[0, :, :3] = rgb(color)
+    a[0, :, 3] = alpha
+    return ImageTk.PhotoImage(Image.fromarray(a, "RGBA"))
 
 
 def work_area():
@@ -1305,37 +1491,60 @@ def round_corners(win):
 WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_EX_LAYERED = 0x08000000, 0x80, 0x20, 0x80000
 
 
-def draw_pill(c, x0, y0, x1, y1, fill):
+def put(c, x, y, img, tags=(), anchor="nw"):
+    """Draw a shape image on a canvas, keeping it alive as long as the canvas shows it."""
+    if not hasattr(c, "_imgs"):
+        c._imgs = []
+    c._imgs.append(img)
+    return c.create_image(x, y, image=img, anchor=anchor, tags=tags)
+
+
+def clear(c, tag="all"):
+    c.delete(tag)
+    if tag == "all":
+        c._imgs = []
+
+
+def pill(c, x0, y0, x1, y1, fill, outline="", edge=""):
     h = y1 - y0
-    c.create_oval(x0, y0, x0 + h, y1, fill=fill, outline=fill)
-    c.create_oval(x1 - h, y0, x1, y1, fill=fill, outline=fill)
-    c.create_rectangle(x0 + h / 2, y0, x1 - h / 2, y1, fill=fill, outline=fill)
+    return put(c, x0, y0, shape(round(x1 - x0), round(h), h / 2, fill, outline, 1, edge))
 
 
-def round_rect(c, x0, y0, x1, y1, r, fill="", outline="", width=1, tags=()):
-    r = max(0, min(r, (x1 - x0) / 2, (y1 - y0) / 2))
-    pts = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1, x1 - r, y1,
-           x0 + r, y1, x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
-    return c.create_polygon(pts, smooth=True, fill=fill, outline=outline, width=width, tags=tags)
+def dot(c, cx, cy, r, fill):
+    d = max(2, round(2 * r))
+    return put(c, cx - d / 2, cy - d / 2, shape(d, d, d / 2, fill))
 
 
 # --------------------------------------------------------------------- widgets
 
 class Card(tk.Canvas):
-    """A rounded surface holding a frame (self.body)."""
+    """A rounded surface holding a frame (self.body). Cards get a lit top edge;
+    outline colour changes (e.g. focus) fade."""
 
-    def __init__(self, parent, fill=None, radius=6, pad=2, outline="", stretch=False):
+    def __init__(self, parent, fill=None, radius=RADIUS["card"], pad=None, outline="", stretch=False,
+                 edge=True):
         super().__init__(parent, bg=parent.cget("bg"), highlightthickness=0, bd=0, height=1)
-        self.fill, self.r, self.pad, self.outline = fill or T["surface"], px(radius), px(pad), outline
+        self.fill, self.r, self.outline = fill or T["surface"], px(radius), outline
+        # keep the square body frame inside the rounded corners
+        self.pad = px(pad) if pad is not None else math.ceil(self.r * (1 - 1 / math.sqrt(2))) + 1
+        self.edge = T["edge_glow"] if edge else ""
         self.stretch = stretch  # fill the space it's packed into, instead of fitting its content
         self.body = tk.Frame(self, bg=self.fill)
         self._win = self.create_window(self.pad, self.pad, window=self.body, anchor="nw")
+        self._from = self._to = outline
+        self._fade = Tween(self, lambda v: self._set_outline(mix(self._from, self._to, v)) if self._to else None, 1.0)
+        self._paint = Redraw(self, self._render)
         self.bind("<Configure>", self._layout)
         self.body.bind("<Configure>", self._layout)
 
-    def set_outline(self, color):
+    def _set_outline(self, color):
         self.outline = color
-        self._layout()
+        self._paint()
+
+    def set_outline(self, color):
+        self._from, self._to = self.outline or self.fill, color
+        self._fade.set(0)
+        self._fade.to(1, MOTION["hover"], ease_colour)
 
     def _layout(self, _=None):
         w = self.winfo_width()
@@ -1347,33 +1556,47 @@ class Card(tk.Canvas):
             if int(float(self.cget("height"))) != h:
                 self.config(height=h)
             self.itemconfig(self._win, width=max(1, w - 2 * self.pad))
-        self.delete("bg")
-        round_rect(self, 0, 0, w - 1, h - 1, self.r, fill=self.fill, outline=self.outline, tags="bg")
+        self._paint()
+
+    def _render(self):
+        w, h = self.winfo_width(), int(float(self.cget("height"))) if not self.stretch else self.winfo_height()
+        if w < 4 or h < 4:
+            return
+        clear(self, "bg")
+        self._img = shape(w, h, self.r, self.fill, self.outline, max(1, px(1)), self.edge)
+        self.create_image(0, 0, image=self._img, anchor="nw", tags="bg")
         self.tag_lower("bg")
 
 
 class Button(tk.Canvas):
-    """Rounded button. kind: standard, primary (one per view), subtle (no fill)."""
+    """Rounded button. kind: standard, primary (white, one per view), subtle (no fill),
+    selected. Hover fades, press dips. confirm="Copied" briefly swaps the label for a
+    green check and that word after a click."""
 
     STYLES = {
         "standard": ("control", "control_hover", "control_active", "text", "border"),
-        "primary": ("accent", "accent_hover", "accent_active", "accent_contrast", ""),
+        "primary": ("select", "select_hover", "dim", "select_contrast", ""),
         "subtle": (None, "surface_hover", "control_active", "text", ""),
         "selected": ("control_hover", "control_hover", "control_active", "text", "border"),
     }
 
-    def __init__(self, parent, text, command, kind="standard", font=None, icon=False, pad_x=12):
-        self.text, self.command, self.kind = text, command, kind
+    def __init__(self, parent, text, command, kind="standard", font=None, icon=False, pad_x=12, confirm=None):
+        self.text, self.command, self.kind, self.confirm = text, command, kind, confirm
+        self.icon = icon
         self.font = font or (F["icon_small"] if icon else F["body"])
+        self.pad_x = pad_x
         f = tkfont.Font(font=self.font)
-        self.w = f.measure(text) + px(pad_x) * 2
         self.h = f.metrics("linespace") + px(10)
-        super().__init__(parent, width=self.w + px(4), height=self.h + px(4), bg=parent.cget("bg"),
+        super().__init__(parent, height=self.h + px(4), bg=parent.cget("bg"),
                          highlightthickness=0, bd=0, takefocus=1, cursor="hand2")
-        self.state, self.focused, self.enabled = "normal", False, True
-        for ev, st in (("<Enter>", "hover"), ("<Leave>", "normal")):
-            self.bind(ev, lambda e, st=st: self._set(st))
-        self.bind("<ButtonPress-1>", lambda e: self._set("active"))
+        self._measure()
+        self.pressed = self.focused = self.confirming = False
+        self.enabled = True
+        self.redraw = Redraw(self, self.draw)
+        self.hover = Tween(self, self.redraw, 0.0)
+        self.bind("<Enter>", lambda e: self.hover.to(1, MOTION["hover"], ease_colour))
+        self.bind("<Leave>", lambda e: (self._press(False), self.hover.to(0, MOTION["hover"], ease_colour)))
+        self.bind("<ButtonPress-1>", lambda e: self._press(True))
         self.bind("<ButtonRelease-1>", self._release)
         self.bind("<FocusIn>", lambda e: self._focus(True))
         self.bind("<FocusOut>", lambda e: self._focus(False))
@@ -1381,9 +1604,18 @@ class Button(tk.Canvas):
             self.bind(key, lambda e: self._fire())
         self.draw()
 
-    def _set(self, state):
-        self.state = state
-        self.draw()
+    def _measure(self):
+        f = tkfont.Font(font=self.font)
+        w = f.measure(self.text)
+        if self.confirm:  # room for the confirmation so the layout doesn't jump
+            w = max(w, f.measure(self.confirm) + tkfont.Font(font=F["icon_small"]).measure(GLYPH["check"]) + px(6))
+        self.w = w + px(self.pad_x) * 2
+        self.config(width=self.w + px(4))
+
+    def _press(self, on):
+        if self.pressed != on:
+            self.pressed = on
+            self.draw()
 
     def _focus(self, on):
         self.focused = on
@@ -1391,13 +1623,21 @@ class Button(tk.Canvas):
 
     def _release(self, e):
         inside = 0 <= e.x <= self.winfo_width() and 0 <= e.y <= self.winfo_height()
-        self._set("hover" if inside else "normal")
+        self._press(False)
         if inside:
             self._fire()
 
     def _fire(self):
         if self.enabled and self.command:
             self.command()
+            if self.confirm and self.winfo_exists():
+                self.confirming = True
+                self.draw()
+                self.after(MOTION["confirm"], self._unconfirm)
+
+    def _unconfirm(self):
+        self.confirming = False
+        self.draw()
 
     def set_kind(self, kind):
         self.kind = kind
@@ -1405,45 +1645,56 @@ class Button(tk.Canvas):
 
     def set_text(self, text):
         self.text = text
-        f = tkfont.Font(font=self.font)
-        self.w = f.measure(text) + px(12) * 2
-        self.config(width=self.w + px(4))
+        self._measure()
         self.draw()
 
     def draw(self):
-        self.delete("all")
+        clear(self)
         base, hover, active, fg, line = self.STYLES[self.kind]
-        fill = {"normal": base, "hover": hover, "active": active}[self.state]
-        fill = T[fill] if fill else self.cget("bg")
+        bg = self.cget("bg")
+        base = T[base] if base else bg
+        fill = T[active] if self.pressed else mix(base, T[hover], self.hover.value)
         o = px(2)
         if self.focused:
-            round_rect(self, 0, 0, self.w + px(3), self.h + px(3), px(6), outline=T["focus"], width=px(1.5))
-        round_rect(self, o, o, o + self.w - 1, o + self.h - 1, px(4), fill=fill,
-                   outline=T[line] if line else "")
-        self.create_text(o + self.w / 2, o + self.h / 2, text=self.text, font=self.font,
-                         fill=T[fg] if self.enabled else T["disabled"])
+            put(self, 0, 0, shape(self.w + px(4), self.h + px(4), px(RADIUS["control"] + 2), "", T["focus"],
+                                  max(1, px(1.5))))
+        i = px(1) if self.pressed else 0  # the press dip (~97%)
+        put(self, o + i, o + i, shape(self.w - 2 * i, self.h - 2 * i, px(RADIUS["control"]), fill,
+                                      T[line] if line else "", max(1, px(1))))
+        cx, cy = o + self.w / 2, o + self.h / 2
+        color = T[fg] if self.enabled else T["disabled"]
+        if self.confirming:
+            f = tkfont.Font(font=self.font)
+            gw = tkfont.Font(font=F["icon_small"]).measure(GLYPH["check"])
+            x = cx - (gw + px(6) + f.measure(self.confirm)) / 2
+            self.create_text(x, cy, text=GLYPH["check"], font=F["icon_small"], fill=T["success"], anchor="w")
+            self.create_text(x + gw + px(6), cy, text=self.confirm, font=self.font, fill=color, anchor="w")
+        else:
+            self.create_text(cx, cy, text=self.text, font=self.font, fill=color)
 
 
 class Switch(tk.Canvas):
-    """Fluent toggle switch."""
+    """Capsule toggle: white when on. The knob glides, and stretches while pressed."""
 
     def __init__(self, parent, value, command):
         self.value, self.command = bool(value), command
-        self.sw, self.sh = px(40), px(20)
+        self.sw, self.sh = px(40), px(22)
         super().__init__(parent, width=self.sw + px(6), height=self.sh + px(6), bg=parent.cget("bg"),
                          highlightthickness=0, bd=0, takefocus=1, cursor="hand2")
-        self.hover = self.focused = False
-        self.bind("<Enter>", lambda e: self._h(True))
-        self.bind("<Leave>", lambda e: self._h(False))
-        self.bind("<Button-1>", lambda e: self.toggle())
+        self.focused = False
+        self.redraw = Redraw(self, self.draw)
+        self.pos = Tween(self, self.redraw, float(self.value))
+        self.hover = Tween(self, self.redraw, 0.0)
+        self.stretch = Tween(self, self.redraw, 0.0)
+        self.bind("<Enter>", lambda e: self.hover.to(1, MOTION["hover"], ease_colour))
+        self.bind("<Leave>", lambda e: (self.hover.to(0, MOTION["hover"], ease_colour),
+                                        self.stretch.to(0, MOTION["hover"])))
+        self.bind("<ButtonPress-1>", lambda e: self.stretch.to(1, MOTION["hover"]))
+        self.bind("<ButtonRelease-1>", lambda e: (self.stretch.to(0, MOTION["hover"]), self.toggle()))
         for key in ("<space>", "<Return>"):
             self.bind(key, lambda e: self.toggle())
         self.bind("<FocusIn>", lambda e: self._f(True))
         self.bind("<FocusOut>", lambda e: self._f(False))
-        self.draw()
-
-    def _h(self, v):
-        self.hover = v
         self.draw()
 
     def _f(self, v):
@@ -1452,39 +1703,93 @@ class Switch(tk.Canvas):
 
     def set(self, value):
         self.value = bool(value)
-        self.draw()
+        self.pos.to(float(self.value))
 
     def toggle(self):
         self.value = not self.value
-        self.draw()
+        self.pos.to(float(self.value))
         self.command(self.value)
 
     def draw(self):
-        self.delete("all")
+        clear(self)
         o, w, h = px(3), self.sw, self.sh
+        t, hv, s = self.pos.value, self.hover.value, self.stretch.value
         if self.focused:
-            round_rect(self, 0, 0, w + px(5), h + px(5), px(13), outline=T["focus"], width=px(1.5))
-        r = h / 2
-        if self.value:
-            round_rect(self, o, o, o + w, o + h, r, fill=T["accent_hover" if self.hover else "accent"])
-            k = px(12)
-            cx, cy = o + w - r, o + r
-            self.create_oval(cx - k / 2, cy - k / 2, cx + k / 2, cy + k / 2, fill=T["accent_contrast"], outline="")
-        else:
-            round_rect(self, o, o, o + w, o + h, r, fill=T["surface_hover"] if self.hover else self.cget("bg"),
-                       outline="#9a9a9a", width=px(1))
-            k = px(10)
-            cx, cy = o + r, o + r
-            self.create_oval(cx - k / 2, cy - k / 2, cx + k / 2, cy + k / 2, fill="#c8c8c8", outline="")
+            put(self, 0, 0, shape(w + px(6), h + px(6), (h + px(6)) / 2, "", T["focus"], max(1, px(1.5))))
+        off = mix(T["control"], T["control_hover"], hv)
+        on = mix(T["select"], T["select_hover"], hv)
+        track = mix(off, on, ease_colour(t))
+        put(self, o, o, shape(w, h, h / 2, track, mix(T["border"], track, t), max(1, px(1))))
+        k, gap = px(14), px(4)
+        kw = k + s * px(4)
+        x = o + gap + t * (w - 2 * gap - k) - s * t * px(4)
+        put(self, x, o + (h - k) / 2, shape(round(kw), k, k / 2, mix(T["muted"], T["select_contrast"], t)))
+
+
+class Segmented(tk.Canvas):
+    """Pick one of a few options; a white capsule slides to the chosen one."""
+
+    def __init__(self, parent, options, value, command):
+        self.options, self.value, self.command = options, value, command
+        f = tkfont.Font(font=F["caption"])
+        self.pad, self.h = px(3), f.metrics("linespace") + px(12)
+        self.widths = [f.measure(text) + px(24) for _, text in options]
+        self.xs = [self.pad + sum(self.widths[:i]) for i in range(len(options))]
+        self.w = sum(self.widths) + 2 * self.pad
+        super().__init__(parent, width=self.w, height=self.h, bg=parent.cget("bg"),
+                         highlightthickness=0, bd=0, takefocus=1, cursor="hand2")
+        self.focused = False
+        i = self._index(value)
+        self.redraw = Redraw(self, self.draw)
+        self.thumb = Tween(self, self.redraw, float(i))
+        self.bind("<Button-1>", self._click)
+        self.bind("<Left>", lambda e: self.choose(max(0, self._index(self.value) - 1)))
+        self.bind("<Right>", lambda e: self.choose(min(len(options) - 1, self._index(self.value) + 1)))
+        self.bind("<FocusIn>", lambda e: (setattr(self, "focused", True), self.draw()))
+        self.bind("<FocusOut>", lambda e: (setattr(self, "focused", False), self.draw()))
+        self.draw()
+
+    def _index(self, value):
+        return next((i for i, (v, _) in enumerate(self.options) if v == value), 0)
+
+    def _click(self, e):
+        for i, x in enumerate(self.xs):
+            if x <= e.x < x + self.widths[i]:
+                self.choose(i)
+
+    def choose(self, i):
+        value = self.options[i][0]
+        if value != self.value:
+            self.value = value
+            self.thumb.to(float(i))
+            self.command(value)
+
+    def draw(self):
+        clear(self)
+        put(self, 0, 0, shape(self.w, self.h, self.h / 2, T["control"],
+                              T["focus"] if self.focused else "", max(1, px(1.5))))
+        t = self.thumb.value
+        lo = int(math.floor(t))
+        hi = min(lo + 1, len(self.options) - 1)
+        k = t - lo
+        x = self.xs[lo] + (self.xs[hi] - self.xs[lo]) * k
+        tw = self.widths[lo] + (self.widths[hi] - self.widths[lo]) * k
+        ih = self.h - 2 * self.pad
+        put(self, x, self.pad, shape(round(tw), ih, ih / 2, T["select"]))
+        for i, (_, text) in enumerate(self.options):
+            near = max(0.0, 1 - abs(t - i))
+            self.create_text(self.xs[i] + self.widths[i] / 2, self.h / 2, text=text, font=F["caption"],
+                             fill=mix(T["dim"], T["select_contrast"], near))
 
 
 def key_chip(parent, text):
-    f = tkfont.Font(font=F["body"])
-    w, h = f.measure(text) + px(16), f.metrics("linespace") + px(6)
-    c = tk.Canvas(parent, width=w + px(2), height=h + px(3), bg=parent.cget("bg"), highlightthickness=0, bd=0)
-    round_rect(c, 1, px(2), w, h + px(2), px(4), fill=T["border"])            # bottom edge (key cap)
-    round_rect(c, 1, 1, w, h, px(4), fill=T["control"], outline=T["border"])
-    c.create_text(w / 2 + 1, h / 2 + 1, text=text, font=F["body"], fill=T["text"])
+    f = tkfont.Font(font=F["caption"])
+    w, h = f.measure(text) + px(16), f.metrics("linespace") + px(8)
+    c = tk.Canvas(parent, width=w, height=h + px(2), bg=parent.cget("bg"), highlightthickness=0, bd=0)
+    r = px(RADIUS["chip"])
+    put(c, 0, px(2), shape(w, h, r, T["border"]))                       # bottom edge (key cap)
+    put(c, 0, 0, shape(w, h, r, T["control"], T["border"], max(1, px(1))))
+    c.create_text(w / 2, h / 2, text=text, font=F["caption"], fill=T["dim"])
     return c
 
 
@@ -1495,27 +1800,34 @@ def label(parent, text, kind="body", color="text", **kw):
 
 class RoundedEntry(Card):
     def __init__(self, parent, width=14, placeholder=""):
-        super().__init__(parent, fill=T["control"], radius=4, pad=4, outline=T["border"])
+        super().__init__(parent, fill=T["control"], radius=RADIUS["control"], outline=T["border"], edge=False)
         self.entry = tk.Entry(self.body, width=width, bg=T["control"], fg=T["text"], insertbackground=T["text"],
-                              relief="flat", bd=0, font=F["body"], highlightthickness=0)
+                              relief="flat", bd=0, font=F["body"], highlightthickness=0,
+                              selectbackground=T["selection"])
         self.entry.pack(fill="x", padx=px(6), pady=px(3))
         self.entry.bind("<FocusIn>", lambda e: self.set_outline(T["accent"]))
         self.entry.bind("<FocusOut>", lambda e: self.set_outline(T["border"]))
 
 
 class RoundedText(Card):
-    def __init__(self, parent, height=None, stretch=False):
-        super().__init__(parent, fill=T["control"], radius=6, pad=4, outline=T["border"], stretch=stretch)
-        self.text = tk.Text(self.body, bg=T["control"], fg=T["text"], insertbackground=T["text"], relief="flat",
-                            bd=0, font=F["body"], wrap="word", undo=True, padx=px(8), pady=px(6),
-                            highlightthickness=0, selectbackground="#264f78", height=height or 4)
+    """Multi-line text. In the scratchpad the text area is the card itself (no border
+    until it has focus)."""
+
+    def __init__(self, parent, height=None, stretch=False, fill=None, quiet=False):
+        fill = fill or T["control"]
+        rest = fill if quiet else T["border"]
+        super().__init__(parent, fill=fill, radius=RADIUS["card"], outline=rest, stretch=stretch, edge=quiet)
+        self.text = tk.Text(self.body, bg=fill, fg=T["text"], insertbackground=T["text"], relief="flat",
+                            bd=0, font=F["body"], wrap="word", undo=True, padx=px(10), pady=px(8),
+                            spacing1=px(2), spacing2=px(2), spacing3=px(2), highlightthickness=0,
+                            selectbackground=T["selection"], height=height or 4)
         self.text.pack(fill="both", expand=True)
         self.text.bind("<FocusIn>", lambda e: self.set_outline(T["accent"]))
-        self.text.bind("<FocusOut>", lambda e: self.set_outline(T["border"]))
+        self.text.bind("<FocusOut>", lambda e: self.set_outline(rest))
 
 
 class ScrollArea(tk.Frame):
-    """Vertical scrolling content (wheel scrolls; a thin thumb shows the position)."""
+    """Vertical scrolling content (wheel scrolls; a thin capsule thumb shows the position)."""
 
     def __init__(self, parent):
         super().__init__(parent, bg=parent.cget("bg"))
@@ -1541,11 +1853,12 @@ class ScrollArea(tk.Frame):
 
     def _sync(self, _=None):
         self.canvas.configure(scrollregion=(0, 0, self.canvas.winfo_width(), self.inner.winfo_reqheight()))
-        self.thumb.delete("all")
+        clear(self.thumb)
         top, bottom = self.canvas.yview()
         if bottom - top < 0.999:
             h = self.thumb.winfo_height()
-            round_rect(self.thumb, px(1), top * h, px(4), bottom * h, px(2), fill=T["border"])
+            y0, y1 = top * h, bottom * h
+            put(self.thumb, px(1), y0, shape(px(4), max(px(8), round(y1 - y0)), px(2), T["border"]))
 
     def top(self):
         self.canvas.yview_moveto(0)
@@ -1553,41 +1866,53 @@ class ScrollArea(tk.Frame):
 
 
 def group(parent, title=None, note=None):
-    """A heading and a rounded group; returns the frame to add rows to."""
+    """A heading and a rounded card; returns the frame to add rows to."""
     if title:
-        label(parent, title, "subtitle").pack(fill="x", pady=(px(SPACE[4]), px(2)))
+        label(parent, title, "heading", "muted").pack(fill="x", padx=px(SPACE[1]),
+                                                       pady=(px(SPACE[5]), px(SPACE[1])))
     if note:
-        label(parent, note, "caption", "muted", wraplength=px(440)).pack(fill="x", pady=(0, px(SPACE[1])))
+        label(parent, note, "caption", "muted", wraplength=px(440)).pack(
+            fill="x", padx=px(SPACE[1]), pady=(0, px(SPACE[1])))
     card = Card(parent)
     card.pack(fill="x", pady=(px(SPACE[1]), 0))
     card.body.rows = 0
     return card.body
 
 
+def divider(body):
+    """Row divider: a 1 px line inset from the card edge that fades out at both ends."""
+    c = tk.Canvas(body, height=max(1, px(1)), bg=body.cget("bg"), highlightthickness=0, bd=0)
+    c.pack(fill="x", padx=px(SPACE[3]))
+    c.bind("<Configure>", lambda e: (clear(c), put(c, 0, 0, fade_line(e.width, T["divider"]))))
+    return c
+
+
 def row(body, title, desc=None, on_click=None):
     """A setting row: title + description on the left; returns the right-hand frame."""
     if body.rows:
-        tk.Frame(body, bg=T["divider"], height=max(1, px(1))).pack(fill="x")
+        divider(body)
     body.rows += 1
     r = tk.Frame(body, bg=body.cget("bg"))
     r.pack(fill="x")
     left = tk.Frame(r, bg=r.cget("bg"))
-    left.pack(side="left", fill="x", expand=True, padx=(px(SPACE[4]), px(SPACE[2])), pady=px(SPACE[3] - 2))
+    left.pack(side="left", fill="x", expand=True, padx=(px(SPACE[4]), px(SPACE[2])), pady=px(SPACE[3] - 1))
     label(left, title).pack(fill="x")
     if desc:
         label(left, desc, "caption", "muted", wraplength=px(330)).pack(fill="x")
     right = tk.Frame(r, bg=r.cget("bg"))
     right.pack(side="right", padx=(0, px(SPACE[3])))
     if on_click:
-        def hover(on, frames=(r, left, right)):
+        def paint(v, frames=(r, left, right)):
+            color = mix(T["surface"], T["surface_hover"], v)
             for fr in frames:
-                fr.config(bg=T["surface_hover"] if on else T["surface"])
+                fr.config(bg=color)
                 for ch in fr.winfo_children():
                     if isinstance(ch, tk.Label):
-                        ch.config(bg=fr.cget("bg"))
+                        ch.config(bg=color)
+        fade = Tween(r, paint)
         for w in (r, left, right, *left.winfo_children()):
-            w.bind("<Enter>", lambda e: hover(True), add="+")
-            w.bind("<Leave>", lambda e: hover(False), add="+")
+            w.bind("<Enter>", lambda e: fade.to(1, MOTION["hover"], ease_colour), add="+")
+            w.bind("<Leave>", lambda e: fade.to(0, MOTION["hover"], ease_colour), add="+")
             w.bind("<Button-1>", lambda e: on_click(), add="+")
             w.config(cursor="hand2")
     return right
@@ -1640,9 +1965,8 @@ class Overlay:
         self.levels.append(level)
 
     def _pill(self, w, h, fill=None):
-        x0, y0 = (px(self.W) - w) / 2, px(self.H) - h - px(4)
-        draw_pill(self.canvas, x0 - 1, y0 - 1, x0 + w + 1, y0 + h + 1, T["popup_border"])
-        draw_pill(self.canvas, x0, y0, x0 + w, y0 + h, fill or T["surface"])
+        x0, y0 = round((px(self.W) - w) / 2), px(self.H) - h - px(4)
+        pill(self.canvas, x0, y0, x0 + w, y0 + h, fill or T["surface"], T["popup_border"], T["edge_glow"])
         return x0, y0, x0 + w, y0 + h
 
     def _wave(self, x, cy):
@@ -1652,23 +1976,21 @@ class Overlay:
                                          cy + bh / 2, fill=T["text"], outline="")
 
     def _rec_dot(self, x, cy):
-        p = px(4 + 1.5 * np.sin(self.tick / 4))
-        self.canvas.create_oval(x - p, cy - p, x + p, cy + p, fill=T["recording"], outline="")
+        dot(self.canvas, x, cy, px(4 + 1.5 * np.sin(self.tick / 4)), T["recording"])
 
     def draw(self):
         self.tick += 1
         if self.until and time.time() > self.until:
             self.set("idle")
         c = self.canvas
-        c.delete("all")
+        clear(c)
 
         if self.state == "idle":
             if (self.show_idle or self.listening) and not self.hover:
-                x0, y0 = (px(self.W) - px(44)) / 2, px(self.H) - px(12)
-                draw_pill(c, x0, y0, x0 + px(44), y0 + px(6), "#4a4a4a")
+                x0, y0 = round((px(self.W) - px(44)) / 2), px(self.H) - px(12)  # HoverBar grows from here
+                pill(c, x0, y0, x0 + px(44), y0 + px(6), T["idle_pill"])
                 if self.listening:  # a quiet "I'm listening for the wake word" mark
-                    cx, cy = x0 - px(8), y0 + px(3)
-                    c.create_oval(cx - px(3), cy - px(3), cx + px(3), cy + px(3), fill=T["accent"], outline="")
+                    dot(c, x0 - px(8), y0 + px(3), px(3), T["accent"])
             return
 
         if self.state == "recording":
@@ -1693,26 +2015,27 @@ class Overlay:
             cy, cx = (y0 + y1) / 2, (x0 + x1) / 2
             for i in range(3):
                 r = px(2.5 + 1.5 * max(0, np.sin(self.tick / 5 - i * 0.6)))
-                x = cx + (i - 1) * px(14)
-                c.create_oval(x - r, cy - r, x + r, cy + r, fill=T["accent"], outline="")
+                dot(c, cx + (i - 1) * px(14), cy, r, T["dim"])
             return
 
         # "message" / "error": text pill sized to its text
         tw = tkfont.Font(font=F["body"]).measure(self.text)
         width = min(px(self.W) - px(8), tw + px(44))
         x0, y0, x1, y1 = self._pill(width, px(40))
-        dot = T["danger"] if self.state == "error" else T["accent"]
+        mark = T["danger"] if self.state == "error" else T["accent"]
         cy = (y0 + y1) / 2
-        c.create_oval(x0 + px(15), cy - px(3), x0 + px(21), cy + px(3), fill=dot, outline="")
+        dot(c, x0 + px(18), cy, px(3), mark)
         c.create_text(x0 + px(30), cy, text=self.text, fill=T["text"], font=F["body"], anchor="w")
 
 
 class HoverBar:
     """Replaces the idle pill while you hover it: scratchpad, settings and microphone
-    on the left, paste-last on the right. Clicking it doesn't take focus from your app."""
+    on the left, paste-last on the right. It grows out of the idle pill, and a white
+    circle slides under whatever you point at. Clicking it doesn't take focus from your app."""
 
-    W, H = 280, 92        # includes room above the bar for tooltips
-    BAR_W, BAR_H = 214, 40
+    W, H = 300, 96        # includes room above the bar for tooltips
+    BAR_H, ITEM = 44, 36
+    IDLE_W, IDLE_H, IDLE_BOTTOM = 44, 6, 6   # the Overlay's idle pill, which the bar grows from
 
     def __init__(self, app):
         self.app = app
@@ -1731,37 +2054,74 @@ class HoverBar:
         set_ex_style(self.win, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
         self.visible = False
         self.hot = None
-        self.bx0 = (self.w - px(self.BAR_W)) / 2
+
+        # layout of the full bar: three round icon buttons | paste-last capsule
+        item = px(self.ITEM)
+        self.paste_w = px(10 + 16 + 8 + 14) + tkfont.Font(font=F["body"]).measure("Paste last")
+        self.bar_w = px(4) + 3 * item + px(13) + self.paste_w + px(4)
+        self.bx0 = round((self.w - self.bar_w) / 2)
         self.by1 = self.h - px(2)
         self.by0 = self.by1 - px(self.BAR_H)
-        X = lambda v: self.bx0 + px(v)
-        self.items = [
-            # name, glyph, tooltip, hit box (x0, x1), icon centre
-            ("notes", GLYPH["notes"], "Scratchpad", (X(6), X(40)), X(23)),
-            ("settings", GLYPH["settings"], "Settings & history", (X(40), X(74)), X(57)),
-            ("mic", GLYPH["mic"], "Microphone", (X(74), X(108)), X(91)),
-            ("paste", GLYPH["paste"], "", (X(118), X(208)), X(134)),
-        ]
+        x = self.bx0 + px(4)
+        self.items = []  # name, glyph, x0 (relative to the bar), width
+        for name in ("notes", "settings", "mic"):
+            self.items.append((name, GLYPH[name], x - self.bx0, item))
+            x += item
+        self.sep_x = x + px(6) - self.bx0
+        self.items.append(("paste", GLYPH["paste"], x + px(13) - self.bx0, self.paste_w))
+
+        redraw = Redraw(self.canvas, self.draw)
+        self.grow = Tween(self.canvas, redraw)        # 0 = idle pill, 1 = full bar
+        self.dot_x = Tween(self.canvas, redraw)       # the white circle
+        self.dot_w = Tween(self.canvas, redraw, float(item))
+        self.dot_a = Tween(self.canvas, redraw)
+        self.tip_a = Tween(self.canvas, redraw)
+        self.tip_x = Tween(self.canvas, redraw)
+        self.tip = ""
         self.canvas.bind("<Motion>", self._motion)
         self.canvas.bind("<Leave>", lambda e: self._set_hot(None))
         self.canvas.bind("<Button-1>", self._click)
 
     def _item_at(self, x, y):
-        if not (self.by0 <= y <= self.by1):
+        if not (self.by0 <= y <= self.by1) or self.grow.value < 0.9:
             return None
-        for name, _, _, (x0, x1), _ in self.items:
-            if x0 <= x <= x1:
+        for name, _, x0, w in self.items:
+            if x0 <= x - self.bx0 <= x0 + w:
                 return name
         return None
 
     def _motion(self, e):
         self._set_hot(self._item_at(e.x, e.y))
 
+    def _tip_text(self, name):
+        mic = self.app.mic_name or self.app.mics.pick(self.app.cfg["mic"])[1] or "Windows default"
+        return {"notes": "Scratchpad", "settings": "Settings & history", "mic": f"Microphone · {mic}"[:48],
+                "paste": f"Recent transcripts · {self.app.cfg['paste_last_keys'].title()}"}[name]
+
     def _set_hot(self, name):
-        if name != self.hot:
-            self.hot = name
-            self.canvas.config(cursor="hand2" if name else "")
-            self.draw()
+        if name == self.hot:
+            return
+        appearing = self.hot is None
+        self.hot = name
+        self.canvas.config(cursor="hand2" if name else "")
+        if not name:
+            self.dot_a.to(0, MOTION["hover"], ease_colour)
+            self.tip_a.to(0, MOTION["hover"], ease_colour)
+            return
+        _, _, x0, w = next(i for i in self.items if i[0] == name)
+        self.tip = self._tip_text(name)
+        tw = tkfont.Font(font=F["caption"]).measure(self.tip) + px(20)
+        tip_x = max(px(2), min(self.w - tw - px(2), self.bx0 + x0 + w / 2 - tw / 2))
+        if appearing and self.dot_a.value < 0.05:  # appear in place, don't fly in from the last spot
+            self.dot_x.set(x0)
+            self.dot_w.set(w)
+            self.tip_x.set(tip_x)
+        else:
+            self.dot_x.to(x0)
+            self.dot_w.to(w)
+            self.tip_x.to(tip_x)
+        self.dot_a.to(1, MOTION["hover"], ease_colour)
+        self.tip_a.to(1, MOTION["hover"])
 
     def _click(self, e):
         name = self._item_at(e.x, e.y)
@@ -1776,31 +2136,54 @@ class HoverBar:
 
     def draw(self):
         c = self.canvas
-        c.delete("all")
-        x1 = self.bx0 + px(self.BAR_W)
-        round_rect(c, self.bx0, self.by0, x1, self.by1, px(8), fill=T["surface"], outline=T["popup_border"])
-        cy = (self.by0 + self.by1) / 2
-        for name, glyph, tip, (hx0, hx1), icx in self.items:
-            if name == self.hot:
-                round_rect(c, hx0 + px(2), self.by0 + px(5), hx1 - px(2), self.by1 - px(5), px(4), fill=T["control"])
-            c.create_text(icx, cy, text=glyph, font=F["icon"], fill=T["text"] if name == self.hot else "#d0d0d0")
-        c.create_text(self.bx0 + px(146), cy, text="Paste last", anchor="w", font=F["body"],
-                      fill=T["text"] if self.hot == "paste" else "#d0d0d0")
-        c.create_line(self.bx0 + px(113), self.by0 + px(11), self.bx0 + px(113), self.by1 - px(11),
-                      fill=T["border"], width=max(1, px(1)))
-        mic = self.app.mic_name or self.app.mics.pick(self.app.cfg["mic"])[1] or "Windows default"
-        tip = {"notes": "Scratchpad", "settings": "Settings & history", "mic": f"Microphone · {mic}"[:48],
-               "paste": f"Recent transcripts · {self.app.cfg['paste_last_keys'].title()}"}.get(self.hot)
-        if tip:
-            tw = tkfont.Font(font=F["caption"]).measure(tip)
-            tx0 = max(px(2), min(self.w - tw - px(22), (self.w - tw) / 2 - px(10)))
-            ty1 = self.by0 - px(8)
-            round_rect(c, tx0, ty1 - px(28), tx0 + tw + px(20), ty1, px(4), fill=T["surface"],
-                       outline=T["popup_border"])
-            c.create_text(tx0 + px(10), ty1 - px(14), text=tip, anchor="w", font=F["caption"], fill=T["text"])
+        clear(c)
+        g = self.grow.value
+        if g <= 0 and not self.visible:
+            return
+        lerp = lambda a, b: a + (b - a) * g
+        w, h = lerp(px(self.IDLE_W), self.bar_w), lerp(px(self.IDLE_H), px(self.BAR_H))
+        bottom = lerp(self.h - px(self.IDLE_BOTTOM), self.by1)
+        x0 = round(self.w / 2 - w / 2)
+        y0 = round(bottom - h)
+        fill = mix(T["idle_pill"], T["surface"], g)
+        pill(c, x0, y0, x0 + round(w), y0 + round(h), fill, mix(T["idle_pill"], T["popup_border"], g),
+             T["edge_glow"] if g > 0.6 else "")
+        a = max(0.0, min(1.0, (g - 0.55) / 0.45))  # contents fade in near the end of the growth
+        if a <= 0:
+            return
+        shift = x0 - self.bx0  # follow the bar while it's still growing
+        cy = y0 + h / 2
+        item = px(self.ITEM)
+        sx = self.bx0 + shift + self.sep_x
+        c.create_line(sx, cy - px(9), sx, cy + px(9), fill=mix(fill, T["border"], a), width=max(1, px(1)))
+        da = self.dot_a.value * a
+        if da > 0.01:
+            dx, dw = self.bx0 + shift + self.dot_x.value, self.dot_w.value
+            put(c, round(dx), round(cy - item / 2),
+                shape(round(dw), item, item / 2, mix(T["surface"], T["select"], da)))
+        for name, glyph_, ix, iw in self.items:
+            # icons turn dark as the circle passes under them
+            under = da * max(0.0, 1 - abs(self.dot_x.value - ix) / item)
+            color = mix(mix(fill, T["dim"], a), T["select_contrast"], under)
+            if name == "paste":
+                left = self.bx0 + shift + ix + px(10)
+                icon(c, left + px(8), cy, glyph_, color)
+                c.create_text(left + px(24), cy, text="Paste last", anchor="w", font=F["body"], fill=color)
+            else:
+                icon(c, self.bx0 + shift + ix + iw / 2, cy, glyph_, color)
+        ta = self.tip_a.value * a
+        if self.tip and ta > 0.05:
+            f = tkfont.Font(font=F["caption"])
+            tw, th = f.measure(self.tip) + px(20), px(28)
+            ty1 = self.by0 - px(8) + round((1 - ta) * px(4))  # rises 4 px as it appears
+            tx0 = round(self.tip_x.value)
+            put(c, tx0, ty1 - th, shape(tw, th, px(RADIUS["control"]), T["surface"], T["popup_border"],
+                                        max(1, px(1))))
+            c.create_text(tx0 + px(10), ty1 - th / 2, text=self.tip, anchor="w", font=F["caption"],
+                          fill=mix(T["surface"], T["text"], ta))
 
     def contains(self, x, y):
-        return (self.visible and self.x + self.bx0 - px(6) <= x <= self.x + self.bx0 + px(self.BAR_W + 6)
+        return (self.visible and self.x + self.bx0 - px(6) <= x <= self.x + self.bx0 + self.bar_w + px(6)
                 and self.y + self.by0 - px(6) <= y <= self.y + self.by1 + px(10))
 
     def show(self):
@@ -1809,13 +2192,23 @@ class HoverBar:
             self.win.update_idletasks()
             self.visible = True
             self.hot = None
-            self.draw()
+            self.dot_a.set(0)
+            self.tip_a.set(0)
+            self.grow.to(1, MOTION["enter"])
 
-    def hide(self):
+    def hide(self, animate=True):
+        """Shrinks back into the idle pill. animate=False when something else (the
+        recording pill) is about to take its place."""
         if self.visible:
-            self.win.geometry("+-20000+-20000")
             self.visible = False
             self.hot = None
+            self.dot_a.to(0, MOTION["hover"])
+            self.tip_a.set(0)
+            self.grow.to(0, MOTION["enter"] if animate else 0, done=self._park)
+
+    def _park(self):
+        if not self.visible:
+            self.win.geometry("+-20000+-20000")
 
 
 # ---------------------------------------------------------------- popup windows
@@ -1840,14 +2233,28 @@ class Popup:
         self.frame = tk.Frame(self.win, bg=T["bg"])
         self.frame.pack(fill="both", expand=True, padx=1, pady=1)
         self.win.bind("<Button-1>", lambda e: self.win.focus_force(), add="+")
+        self._xy = (0, 0)
+        self._enter = Tween(self.win, self._entering, 1.0)
+
+    def _entering(self, v):
+        """Fade in while rising the last few pixels into place."""
+        x, y = self._xy
+        self.win.geometry(f"+{x}+{y + round((1 - v) * px(MOTION['rise']))}")
+        self.win.attributes("-alpha", v)
 
     def place(self, w, h):
         bar = self.app.bar
         x = bar.x + bar.w // 2 - w // 2
         y = bar.y + int(bar.by0) - h - px(10)
+        self._xy = (x, y)
+        appearing = not self.visible
         self.win.geometry(f"{w}x{h}+{x}+{y}")
+        if appearing:
+            self._enter.set(0)
         self.win.update_idletasks()  # apply the move before focusing, or it can stay off-screen
         self.win.lift()
+        if appearing:
+            self._enter.to(1, MOTION["enter"])
         self.visible, self.had_focus, self.shown_at = True, False, time.time()
 
     def take_focus(self, widget=None):
@@ -1859,6 +2266,7 @@ class Popup:
 
     def hide(self):
         if self.visible:
+            self._enter.set(1)
             self.win.geometry(self.OFFSCREEN)
             self.visible = False
             self.set_pinned(False)
@@ -1877,7 +2285,7 @@ class Popup:
 
     def header(self, parent, title, subtitle=None, pin=True):
         head = tk.Frame(parent, bg=parent.cget("bg"))
-        head.pack(fill="x", padx=px(SPACE[4]), pady=(px(SPACE[3]), 0))
+        head.pack(fill="x", padx=(px(SPACE[5]), px(SPACE[3])), pady=(px(SPACE[4]), px(SPACE[1])))
         lbl = label(head, title, "title")
         lbl.pack(side="left")
         Button(head, GLYPH["close"], self.hide, kind="subtle", icon=True, pad_x=8).pack(side="right")
@@ -1889,7 +2297,7 @@ class Popup:
         sub = None
         if subtitle is not None:
             sub = label(parent, subtitle, "caption", "muted")
-            sub.pack(fill="x", padx=px(SPACE[4]))
+            sub.pack(fill="x", padx=px(SPACE[5]))
         return lbl, sub, pin_btn
 
 
@@ -1919,8 +2327,9 @@ def transcript_card(parent, entry, number, buttons, on_body=None, wrap=360):
     if number:
         key_chip(top, str(number)).pack(side="left", padx=(0, px(SPACE[2])))
     label(top, when_label(entry), "caption", "muted").pack(side="left")
-    for text, fn, kind in reversed(buttons):
-        Button(top, text, fn, kind=kind, font=F["caption"], pad_x=10).pack(side="right", padx=(px(2), 0))
+    for text, fn, kind, *confirm in reversed(buttons):
+        Button(top, text, fn, kind=kind, font=F["caption"], pad_x=10, confirm=confirm[0] if confirm else None).pack(
+            side="right", padx=(px(SPACE[1]), 0))
     body = tk.Frame(b, bg=b.cget("bg"))
     body.pack(fill="x", padx=px(SPACE[3]), pady=(px(SPACE[1]), px(SPACE[3])))
     text = entry["text"] if len(entry["text"]) < 220 else entry["text"][:217] + "…"
@@ -1983,7 +2392,7 @@ class Picker(Popup):
                 fill="x", pady=px(SPACE[2]))
         for i, e in enumerate(self.shown):
             transcript_card(self.cards, e, i + 1,
-                            [("Copy", lambda t=e["text"]: self.copy(t), "standard"),
+                            [("Copy", lambda t=e["text"]: pyperclip.copy(t), "standard", "Copied"),
                              ("Paste", lambda i=i: self.choose(i), "primary")],
                             on_body=lambda i=i: self.choose(i))
         if self.visible:
@@ -2002,11 +2411,6 @@ class Picker(Popup):
             text = self.shown[i]["text"]
             self.hide()
             self.app.paste_text(text, restore_focus=True)
-
-    def copy(self, text):
-        pyperclip.copy(text)
-        self.status.config(text="Copied to clipboard")
-        self.win.after(1500, lambda: self.visible and self.status.config(text=self.HINT))
 
     def show(self):
         self.app.panel.hide()
@@ -2073,6 +2477,115 @@ class MicMenu(Popup):
 
 # --------------------------------------------------------- scratchpad + settings
 
+class NavList(tk.Canvas):
+    """Settings sidebar: a filled capsule slides to the chosen page.
+    Keyboard: Tab in, Up/Down to move, Enter or Space opens."""
+
+    def __init__(self, parent, pages, icons, current, on_choose):
+        self.pages, self.icons, self.current, self.on_choose = pages, icons, current, on_choose
+        self.ih, self.gap = px(36), px(2)
+        super().__init__(parent, height=len(pages) * (self.ih + self.gap), bg=parent.cget("bg"),
+                         highlightthickness=0, bd=0, takefocus=1, cursor="hand2")
+        self.hot = self.focus_i = None
+        redraw = Redraw(self, self.draw)
+        self.cap = Tween(self, redraw, float(pages.index(current)))
+        self.hover = [Tween(self, redraw) for _ in pages]
+        self.bind("<Configure>", redraw)
+        self.bind("<Motion>", lambda e: self._set_hot(self._at(e.y)))
+        self.bind("<Leave>", lambda e: self._set_hot(None))
+        self.bind("<Button-1>", self._click)
+        self.bind("<FocusIn>", lambda e: (setattr(self, "focus_i", self.pages.index(self.current)), redraw()))
+        self.bind("<FocusOut>", lambda e: (setattr(self, "focus_i", None), redraw()))
+        self.bind("<Up>", lambda e: self._move(-1))
+        self.bind("<Down>", lambda e: self._move(1))
+        for key in ("<space>", "<Return>"):
+            self.bind(key, lambda e: self.focus_i is not None and self.on_choose(self.pages[self.focus_i]))
+
+    def _at(self, y):
+        i = int(y // (self.ih + self.gap))
+        return i if 0 <= i < len(self.pages) else None
+
+    def _click(self, e):
+        i = self._at(e.y)
+        if i is not None:
+            self.on_choose(self.pages[i])
+
+    def _set_hot(self, i):
+        if i != self.hot:
+            if self.hot is not None:
+                self.hover[self.hot].to(0, MOTION["hover"], ease_colour)
+            if i is not None:
+                self.hover[i].to(1, MOTION["hover"], ease_colour)
+            self.hot = i
+
+    def _move(self, step):
+        self.focus_i = max(0, min(len(self.pages) - 1, (self.focus_i or 0) + step))
+        self.draw()
+
+    def select(self, name):
+        self.current = name
+        self.cap.to(float(self.pages.index(name)))
+
+    def draw(self):
+        clear(self)
+        w, ih, step = self.winfo_width(), self.ih, self.ih + self.gap
+        if w < 10:
+            return
+        for i, hv in enumerate(self.hover):
+            if hv.value > 0.01:
+                put(self, 0, i * step, shape(w, ih, ih / 2, mix(T["nav"], T["surface"], hv.value)))
+        put(self, 0, round(self.cap.value * step), shape(w, ih, ih / 2, T["surface_hover"], "", 1, T["edge_glow"]))
+        if self.focus_i is not None:
+            put(self, 0, self.focus_i * step, shape(w, ih, ih / 2, "", T["focus"], max(1, px(1.5))))
+        for i, name in enumerate(self.pages):
+            near = max(0.0, 1 - abs(self.cap.value - i), self.hover[i].value)
+            color = mix(T["dim"], T["text"], near)
+            cy = i * step + ih / 2
+            self.create_text(px(14), cy, text=self.icons[name], font=F["icon"], fill=color, anchor="w")
+            self.create_text(px(44), cy, text=name, font=F["body"], fill=color, anchor="w")
+
+
+class StatsCorner(tk.Canvas):
+    """Bottom of the sidebar: today's numbers, each with a thin colour bar."""
+
+    def __init__(self, parent):
+        super().__init__(parent, height=1, bg=parent.cget("bg"), highlightthickness=0, bd=0)
+        self.items = []
+        self.bind("<Configure>", lambda e: self.draw())
+
+    def set(self, words, wpm, saved):
+        self.items = [(f"{words:,}", "words today", T["stat1"])]
+        if wpm:
+            self.items.append((f"{wpm}", "wpm", T["stat2"]))
+        if saved >= 1:
+            self.items.append((f"~{saved:.0f} min", "saved today", T["stat3"]))
+        self.draw()
+
+    def draw(self):
+        clear(self)
+        num, small = tkfont.Font(font=F["stat"]), tkfont.Font(font=F["small"])
+        nh, lh = num.metrics("linespace"), small.metrics("linespace")
+        cell, col = nh + lh + px(SPACE[3]), self.winfo_width() / 2
+        for i, (value, what, color) in enumerate(self.items):
+            # the first two share a row; a third (time saved) gets its own
+            x, y = ((i % 2) * col if i < 2 else 0), (i // 2) * cell
+            put(self, x, y + px(5), shape(max(1, px(2)), nh - px(9), px(1), color))
+            self.create_text(x + px(8), y, text=value, font=F["stat"], fill=T["text"], anchor="nw")
+            self.create_text(x + px(8), y + nh, text=what, font=F["small"], fill=T["muted"], anchor="nw")
+        h = max(1, math.ceil(len(self.items) / 2) * cell)
+        if int(float(self.cget("height"))) != h:
+            self.config(height=h)
+
+
+def brand_mark(parent):
+    """White circle with a dark microphone: the app's mark."""
+    d = px(24)
+    c = tk.Canvas(parent, width=d, height=d, bg=parent.cget("bg"), highlightthickness=0, bd=0)
+    dot(c, d / 2, d / 2, d / 2, T["select"])
+    icon(c, d / 2, d / 2, GLYPH["mic"], T["select_contrast"], pt=9)
+    return c
+
+
 class Panel(Popup):
     """Two pages in one window: the scratchpad, and settings with a sidebar
     (General, Microphone, Dictionary, History)."""
@@ -2088,6 +2601,7 @@ class Panel(Popup):
         self.tab = "General"
         self.hist_page = 0
         self._save_job = None
+        self._pages = {}  # built settings pages, kept while their data hasn't changed
         self.notes_root = tk.Frame(self.frame, bg=T["bg"])
         self.settings_root = tk.Frame(self.frame, bg=T["bg"])
         self._build_notes(self.notes_root)
@@ -2130,15 +2644,15 @@ class Panel(Popup):
     def refresh(self):
         if self.page == "notes":
             return
-        words, wpm, saved = stats(read_history())
-        extra = ([f"{wpm} wpm"] if wpm else []) + ([f"~{saved:.0f} min saved"] if saved >= 1 else [])
-        self.stats_lbl.config(text=f"{words:,} words today" + ("\n" + " · ".join(extra) if extra else ""))
+        self.stats.set(*stats(read_history()))
+        for name in [n for n in self._pages if n != self.tab]:  # rebuilt when next visited
+            self._pages.pop(name).destroy()
         self.open_tab(self.tab, keep_scroll=True)
 
     # -- scratchpad
     def _build_notes(self, f):
         _, self.notes_sub, self.notes_pin = self.header(f, "Scratchpad", "Saves as you type. Dictating while it's open types here.")
-        self.notes = RoundedText(f, height=10, stretch=True)
+        self.notes = RoundedText(f, height=10, stretch=True, fill=T["surface"], quiet=True)
         self.notes.pack(fill="both", expand=True, padx=px(SPACE[4]), pady=(px(SPACE[3]), px(SPACE[2])))
         t = self.notes.text
         if NOTES_PATH.exists():
@@ -2152,7 +2666,8 @@ class Panel(Popup):
         self.notes_status.pack(side="left")
         Button(foot, "Open file", lambda: os.startfile(NOTES_PATH) if NOTES_PATH.exists() else None,
                kind="subtle").pack(side="right")
-        Button(foot, "Copy all", lambda: pyperclip.copy(t.get("1.0", "end-1c"))).pack(side="right", padx=px(SPACE[1]))
+        Button(foot, "Copy all", lambda: pyperclip.copy(t.get("1.0", "end-1c")), confirm="Copied").pack(
+            side="right", padx=px(SPACE[1]))
 
     def _notes_changed(self, _):
         t = self.notes.text
@@ -2173,20 +2688,19 @@ class Panel(Popup):
 
     # -- settings window: sidebar + scrolling page
     def _build_settings(self, f):
-        nav = tk.Frame(f, bg=T["nav"], width=px(184))
+        nav = tk.Frame(f, bg=T["nav"], width=px(196))
         nav.pack(side="left", fill="y")
         nav.pack_propagate(False)
         brand = tk.Frame(nav, bg=T["nav"])
-        brand.pack(fill="x", padx=px(SPACE[4]), pady=(px(SPACE[4]), px(SPACE[4])))
-        tk.Label(brand, text=GLYPH["mic"], font=F["icon"], fg=T["accent"], bg=T["nav"]).pack(side="left")
+        brand.pack(fill="x", padx=px(SPACE[4]), pady=(px(SPACE[4]), px(SPACE[5])))
+        brand_mark(brand).pack(side="left")
         label(brand, "LocalFlow", "body_strong").pack(side="left", padx=px(SPACE[2]))
-        self.nav_items = {}
-        for name in self.PAGES:
-            self.nav_items[name] = self._nav_item(nav, name)
+        self.nav = NavList(nav, list(self.PAGES), self.ICONS, self.tab, self.open_tab)
+        self.nav.pack(fill="x", padx=px(SPACE[2]))
         bottom = tk.Frame(nav, bg=T["nav"])
         bottom.pack(side="bottom", fill="x", padx=px(SPACE[3]), pady=px(SPACE[3]))
-        self.stats_lbl = label(bottom, "", "caption", "muted", wraplength=px(150))
-        self.stats_lbl.pack(fill="x", pady=(0, px(SPACE[2])))
+        self.stats = StatsCorner(bottom)
+        self.stats.pack(fill="x", padx=px(SPACE[1]), pady=(0, px(SPACE[3])))
         btns = tk.Frame(bottom, bg=T["nav"])
         btns.pack(fill="x")
         Button(btns, "Restart", self.app.restart, kind="standard", font=F["caption"]).pack(side="left")
@@ -2196,57 +2710,34 @@ class Panel(Popup):
         main.pack(side="left", fill="both", expand=True)
         self.page_title, _, self.settings_pin = self.header(main, "General")
         self.scroll = ScrollArea(main)
-        self.scroll.pack(fill="both", expand=True, padx=(px(SPACE[4]), px(SPACE[1])),
-                         pady=(px(SPACE[1]), px(SPACE[3])))
-
-    def _nav_item(self, nav, name):
-        c = tk.Canvas(nav, height=px(36), bg=T["nav"], highlightthickness=0, bd=0, takefocus=1, cursor="hand2")
-        c.pack(fill="x", padx=px(SPACE[2]), pady=1)
-        c.state = {"hover": False, "focus": False}
-
-        def draw(_=None):
-            c.delete("all")
-            w, h = c.winfo_width(), px(36)
-            on = self.tab == name
-            fill = T["surface"] if on else (T["surface_hover"] if c.state["hover"] else T["nav"])
-            round_rect(c, 1, 1, w - 2, h - 2, px(4), fill=fill,
-                       outline=T["focus"] if c.state["focus"] else "")
-            if on:
-                round_rect(c, px(3), h / 2 - px(8), px(6), h / 2 + px(8), px(2), fill=T["accent"])
-            c.create_text(px(20), h / 2, text=self.ICONS[name], font=F["icon"], fill=T["text"], anchor="w")
-            c.create_text(px(48), h / 2, text=name, font=F["body"], fill=T["text"] if on else "#d6d6d6",
-                          anchor="w")
-
-        c.draw = draw
-        c.bind("<Configure>", draw)
-        c.bind("<Enter>", lambda e: (c.state.update(hover=True), draw()))
-        c.bind("<Leave>", lambda e: (c.state.update(hover=False), draw()))
-        c.bind("<FocusIn>", lambda e: (c.state.update(focus=True), draw()))
-        c.bind("<FocusOut>", lambda e: (c.state.update(focus=False), draw()))
-        c.bind("<Button-1>", lambda e: self.open_tab(name))
-        for key in ("<space>", "<Return>"):
-            c.bind(key, lambda e: self.open_tab(name))
-        return c
+        self.scroll.pack(fill="both", expand=True, padx=(px(SPACE[5]), px(SPACE[1])),
+                         pady=(0, px(SPACE[4])))
 
     def open_tab(self, name, keep_scroll=False):
         if name not in self.PAGES:
             name = "General"
         changed = name != self.tab
         self.tab = name
-        for item in self.nav_items.values():
-            item.draw()
         self.page_title.config(text=name)
         inner = self.scroll.inner
         y = self.scroll.canvas.yview()[0]
-        for w in inner.winfo_children():
-            w.destroy()
-        getattr(self, "_page_" + name.lower())(inner)
+        page = self._pages.get(name)
+        if page is None or keep_scroll:  # keep_scroll: this page's data changed, rebuild it
+            if page is not None:
+                page.destroy()
+            page = self._pages[name] = tk.Frame(inner, bg=T["bg"])
+            getattr(self, "_page_" + name.lower())(page)
+        for other in self._pages.values():
+            if other is not page:
+                other.pack_forget()
+        page.pack(fill="x")
         self.scroll.inner.update_idletasks()
         if changed or not keep_scroll:
             self.scroll.top()
         else:
             self.scroll.canvas.yview_moveto(y)
             self.scroll._sync()
+        self.nav.select(name)  # after building the page, so the slide isn't swallowed by it
 
     def _switch(self, right, key, getter=None, setter=None):
         cfg = self.app.cfg
@@ -2298,12 +2789,9 @@ class Panel(Popup):
             ("whisper" if self.app.engine else cfg["engine"])
         desc = "Parakeet is fastest on this PC" if cfg["engine"] == running else "Restart to switch engines"
         r = row(b, "Engine", desc)
-        seg = tk.Frame(r, bg=r.cget("bg"))
-        seg.pack()
-        for value, text in (("whisper", "Whisper"), ("parakeet", "Parakeet")):
-            Button(seg, text, lambda v=value: (self.app.set_option("engine", v), self.refresh()),
-                   kind="selected" if cfg["engine"] == value else "subtle",
-                   font=F["caption"]).pack(side="right", padx=(px(2), 0))
+        Segmented(r, (("whisper", "Whisper"), ("parakeet", "Parakeet")), cfg["engine"],
+                  lambda v: (self.app.set_option("engine", v),
+                             self.win.after(MOTION["move"], self.refresh))).pack()
         if cfg["engine"] != running:
             r = row(b, "Restart LocalFlow", "Takes about 10 seconds")
             Button(r, "Restart now", self.app.restart, kind="primary", font=F["caption"]).pack()
@@ -2321,7 +2809,7 @@ class Panel(Popup):
 
     # -- Microphone
     def _page_microphone(self, p):
-        label(p, "Input", "subtitle").pack(fill="x", pady=(px(SPACE[2]), px(2)))
+        label(p, "Input", "heading", "muted").pack(fill="x", padx=px(SPACE[1]), pady=(px(SPACE[2]), px(SPACE[1])))
         mic_rows(p, self.app, lambda v: (self.app.set_option("mic", v), self.refresh()))
         b = group(p, "Startup")
         self._switch(row(b, "Keep the mic ready for a minute",
@@ -2404,7 +2892,7 @@ class Panel(Popup):
             _, body = transcript_card(
                 self.cards, e, self.hist_page * PER_PAGE + i + 1,
                 [("Fix", lambda e=e, h=holder: self._fix(e, h["body"]), "subtle"),
-                 ("Copy", lambda t=e["text"]: (pyperclip.copy(t), self._hist_note("Copied")), "standard"),
+                 ("Copy", lambda t=e["text"]: pyperclip.copy(t), "standard", "Copied"),
                  ("Paste", lambda t=e["text"]: self.app.paste_text(t, restore_focus=True), "primary")],
                 wrap=440)
             holder["body"] = body
@@ -2659,7 +3147,7 @@ class App:
 
         # hover bar: appears after a short hover on the idle pill
         if not idle and not self.panel.visible and not self.picker.visible and not self.mic_menu.visible:
-            self.bar.hide()
+            self.bar.hide(animate=False)
             self.hover_since = None
         elif not self.bar.visible:
             if over_zone and idle:

@@ -1,0 +1,56 @@
+/* LocalFlow design tokens: direction 1, "Fluent Graphite".
+   Single source of truth. localflow.py mirrors these in its THEME / TYPE / SPACE
+   tables; change a value here first, then there. */
+:root {
+  /* Color, by role */
+  --color-bg: #1f1f1f;             /* window background */
+  --color-nav: #1a1a1a;            /* sidebar */
+  --color-surface: #2b2b2b;        /* setting groups, cards, popups, the hover bar */
+  --color-surface-hover: #323232;  /* hovered row / nav item */
+  --color-control: #383838;        /* buttons, inputs, key chips, selects */
+  --color-control-hover: #404040;
+  --color-control-active: #2f2f2f;
+  --color-border: #454545;         /* control outlines */
+  --color-divider: #1f1f1f;        /* lines between rows inside a group (= bg) */
+  --color-text: #f3f3f3;
+  --color-text-muted: #a8a8a8;     /* descriptions, captions (AA on surface: 6.6:1) */
+  --color-text-disabled: #6e6e6e;
+  --color-accent: #60cdff;         /* ON switches, primary button, selected-nav marker, focus-free selection */
+  --color-accent-hover: #7ad6ff;
+  --color-accent-active: #4cb6e6;
+  --color-accent-contrast: #00263a;/* text/knob placed on the accent */
+  --color-focus: #ffffff;          /* keyboard focus ring */
+  --color-recording: #ff6b6b;      /* recording dot only */
+  --color-danger: #ff99a4;
+  --color-success: #6ccb5f;
+
+  /* Type: Segoe UI Variable (Windows 11), Segoe UI fallback */
+  --font-display: "Segoe UI Variable Display", "Segoe UI", sans-serif;
+  --font-body: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  --font-icon: "Segoe Fluent Icons", "Segoe MDL2 Assets";
+  --text-caption: 12px;   /* descriptions, meta */
+  --text-body: 13px;      /* setting titles, body */
+  --text-subtitle: 14px;  /* group headings (semibold) */
+  --text-title: 20px;     /* page title (display semibold) */
+  --weight-regular: 400;
+  --weight-semibold: 600;
+
+  /* Spacing: one 4 px scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+
+  /* Radius by role */
+  --radius-control: 4px;  /* buttons, inputs, chips, nav items */
+  --radius-group: 6px;    /* setting groups, cards */
+  --radius-window: 8px;   /* popups, the hover bar */
+  --radius-switch: 10px;
+
+  /* Elevation: only popups get a border-shadow; nothing else */
+  --shadow-popup: 0 8px 24px rgba(0, 0, 0, .45);
+
+  /* Motion: hover colour changes only, no movement */
+  --duration-fast: 80ms;
+}

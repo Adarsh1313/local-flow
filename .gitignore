@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Created by the app on each machine. These hold the user's own words and voice,
+# so they never leave it.
+localflow/config.json
+localflow/history.jsonl
+localflow/history_old.txt
+localflow/dictionary.json
+localflow/notes.txt
+localflow/localflow.log
+localflow/last_recording.wav
+localflow/training/
+localflow/*.tmp
+localflow/@AutomationLog.txt

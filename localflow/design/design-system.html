@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LocalFlow Design System</title>
+<link rel="stylesheet" href="tokens.css">
+<style>
+  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-body); font-size: var(--text-body); }
+  main { max-width: 860px; margin: 0 auto; padding: var(--space-6) var(--space-4); }
+  h1 { font-family: var(--font-display); font-size: var(--text-title); font-weight: var(--weight-semibold); margin: 0 0 var(--space-2); }
+  h2 { font-size: var(--text-subtitle); font-weight: var(--weight-semibold); margin: var(--space-6) 0 var(--space-2); }
+  p, small { color: var(--color-text-muted); }
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--space-2); }
+  .sw { background: var(--color-surface); border-radius: var(--radius-group); padding: var(--space-2); }
+  .sw i { display: block; height: 40px; border-radius: var(--radius-control); border: 1px solid var(--color-border); margin-bottom: var(--space-2); }
+  .sw b { display: block; font-weight: var(--weight-semibold); }
+  .sw small { font-size: var(--text-caption); }
+  .type div { margin: var(--space-1) 0; }
+  .ruler div { display: flex; align-items: center; gap: var(--space-3); margin: var(--space-1) 0; color: var(--color-text-muted); font-size: var(--text-caption); }
+  .ruler span { display: inline-block; height: 12px; background: var(--color-accent); border-radius: 2px; }
+  .group { background: var(--color-surface); border-radius: var(--radius-group); }
+  .row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-divider); }
+  .row:first-child { border-top: 0; }
+  .row .t { flex: 1; }
+  .row small { display: block; font-size: var(--text-caption); }
+  button { font: inherit; border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; transition: background var(--duration-fast); }
+  .std { background: var(--color-control); color: var(--color-text); border: 1px solid var(--color-border); }
+  .std:hover { background: var(--color-control-hover); } .std:active { background: var(--color-control-active); }
+  .pri { background: var(--color-accent); color: var(--color-accent-contrast); border: 0; font-weight: var(--weight-semibold); }
+  .pri:hover { background: var(--color-accent-hover); } .pri:active { background: var(--color-accent-active); }
+  .sub { background: transparent; color: var(--color-text); border: 0; }
+  .sub:hover { background: var(--color-surface-hover); }
+  button:disabled { color: var(--color-text-disabled); cursor: default; }
+  button:focus-visible, .switch:focus-visible, input:focus-visible { outline: 1.5px solid var(--color-focus); outline-offset: 2px; }
+  .key { background: var(--color-control); border: 1px solid var(--color-border); border-bottom-width: 2px; border-radius: var(--radius-control); padding: 2px 8px; }
+  .switch { width: 40px; height: 20px; border-radius: var(--radius-switch); position: relative; flex: none; background: var(--color-accent); border: 0; padding: 0; }
+  .switch::after { content: ""; position: absolute; right: 4px; top: 4px; width: 12px; height: 12px; border-radius: 50%; background: var(--color-accent-contrast); }
+  .switch.off { background: transparent; border: 1px solid #9a9a9a; }
+  .switch.off::after { left: 4px; right: auto; top: 3px; width: 10px; height: 10px; background: #c8c8c8; }
+  input { font: inherit; background: var(--color-control); color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-control); padding: 5px 10px; }
+  input:focus { border-color: var(--color-accent); }
+  .wrap { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
+  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>LocalFlow design system</h1>
+  <p>Direction 1, Fluent Graphite. Every value on this page comes from <code>tokens.css</code>; localflow.py mirrors them in its <code>T</code>, <code>F</code> and <code>SPACE</code> tables.</p>
+
+  <h2>Colour</h2>
+  <div class="swatches">
+    <div class="sw"><i style="background:var(--color-bg)"></i><b>bg #1f1f1f</b><small>Window background, row dividers</small></div>
+    <div class="sw"><i style="background:var(--color-nav)"></i><b>nav #1a1a1a</b><small>Settings sidebar</small></div>
+    <div class="sw"><i style="background:var(--color-surface)"></i><b>surface #2b2b2b</b><small>Groups, cards, popups, hover bar</small></div>
+    <div class="sw"><i style="background:var(--color-control)"></i><b>control #383838</b><small>Buttons, inputs, key chips</small></div>
+    <div class="sw"><i style="background:var(--color-text)"></i><b>text #f3f3f3</b><small>Titles and body</small></div>
+    <div class="sw"><i style="background:var(--color-text-muted)"></i><b>text-muted #a8a8a8</b><small>Descriptions, captions</small></div>
+    <div class="sw"><i style="background:var(--color-accent)"></i><b>accent #60cdff</b><small>On switches, primary button, selected nav, mic tick. Nothing else.</small></div>
+    <div class="sw"><i style="background:var(--color-recording)"></i><b>recording #ff6b6b</b><small>The recording dot only</small></div>
+  </div>
+
+  <h2>Type</h2>
+  <div class="type">
+    <div style="font-family:var(--font-display);font-size:var(--text-title);font-weight:600">Title 20 · General</div>
+    <div style="font-size:var(--text-subtitle);font-weight:600">Subtitle 14 · Dictation</div>
+    <div style="font-size:var(--text-body)">Body 13 · Remove filler words</div>
+    <div style="font-size:var(--text-caption);color:var(--color-text-muted)">Caption 12 · Drops "um" and "uh"</div>
+  </div>
+
+  <h2>Spacing</h2>
+  <div class="ruler">
+    <div><span style="width:var(--space-1)"></span>space-1 · 4</div>
+    <div><span style="width:var(--space-2)"></span>space-2 · 8</div>
+    <div><span style="width:var(--space-3)"></span>space-3 · 12</div>
+    <div><span style="width:var(--space-4)"></span>space-4 · 16</div>
+    <div><span style="width:var(--space-6)"></span>space-6 · 24</div>
+  </div>
+
+  <h2>Components</h2>
+  <div class="wrap">
+    <button class="pri">Paste</button><button class="std">Copy</button><button class="sub">Fix</button>
+    <button class="std" disabled>Disabled</button>
+    <span class="key">Right Ctrl</span>
+    <input placeholder="Heard as">
+  </div>
+  <h2>Setting group</h2>
+  <div class="group">
+    <div class="row"><div class="t">Hold to talk<small>Double-tap for hands-free · Esc cancels</small></div><span class="key">Right Ctrl</span><button class="std">Change</button></div>
+    <div class="row"><div class="t">Remove filler words<small>Drops "um" and "uh"</small></div><button class="switch" aria-label="Remove filler words: on"></button></div>
+    <div class="row"><div class="t">AI cleanup<small>Fixes grammar with Ollama · adds 1–3 s</small></div><button class="switch off" aria-label="AI cleanup: off"></button></div>
+  </div>
+  <h2>Motion</h2>
+  <p>Hover the buttons above: colour changes over <code>--duration-fast</code> (80 ms), nothing moves. The recording pill's waveform is the only animation in the app.</p>
+</main>
+</body>
+</html>

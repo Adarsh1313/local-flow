@@ -1,0 +1,14 @@
+faster-whisper>=1.1
+onnx-asr[cpu,hub]
+sounddevice
+numpy
+keyboard
+pyperclip
+requests
+pystray
+pillow
+uiautomation
+wordfreq
+# GPU (NVIDIA) support for faster-whisper
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*

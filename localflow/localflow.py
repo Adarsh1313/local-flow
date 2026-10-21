@@ -600,10 +600,11 @@ class MicStream:
             else:
                 self.preroll.append(a)
 
-    def attach(self, consumer):
+    def attach(self, consumer, preroll=True):
         with self.lock:
-            for chunk in self.preroll:
-                consumer(chunk)
+            if preroll:
+                for chunk in self.preroll:
+                    consumer(chunk)
             self.preroll.clear()
             self.consumer = consumer
 
@@ -716,8 +717,22 @@ class Session:
             if text:
                 self.parts.append(text)
 
+    def switch_mic(self, mic):
+        """Carry on recording from another mic (the headset, once it's awake).
+        Its preroll is skipped: the mic it replaces already recorded that moment."""
+        with self.lock:
+            if self.stopping.is_set():
+                return False
+            old, self.mic = self.mic, mic
+        old.detach()
+        mic.attach(self._callback, preroll=False)
+        if self.stopping.is_set():  # finished while switching
+            mic.detach()
+        return True
+
     def _close(self):
-        self.stopping.set()
+        with self.lock:
+            self.stopping.set()
         self.mic.detach()
 
     def finish(self):
@@ -3319,7 +3334,7 @@ class App:
         self.post("overlay", "message", "The mic got stuck · restarting LocalFlow…", 4)
         self.post("call", lambda: self.root.after(1500, lambda: self.restart("--after-audio-restart")))
 
-    def _ready_mic(self):
+    def _ready_mic(self, patience=2.0):
         if self.audio_stuck:
             raise MicStuck("waiting for LocalFlow to restart the audio system")
         """An open mic that is actually sending audio. Bluetooth headsets sometimes open
@@ -3327,7 +3342,7 @@ class App:
         usually fixes it, and if it doesn't, auto mode falls back to another mic."""
         try:
             mic = self._ensure_mic()
-            if mic.wait_audio(2.0):  # Bluetooth needs up to ~1 s to start sending
+            if mic.wait_audio(patience):  # Bluetooth needs ~1-2 s, sometimes more, to start sending
                 return mic
         except MicStuck:
             self._audio_stuck()
@@ -3361,10 +3376,54 @@ class App:
                 self._close_mic()
         raise RuntimeError(f"{name} isn't sending any audio")
 
+    def _bridge_mic(self):
+        """(mic, name) to record on while a Bluetooth headset wakes up, or None.
+        Waking a headset (switching it into call mode) takes about 2 s before it sends
+        any audio; the laptop's own mic is ready in under 0.1 s."""
+        # no mics.lock: it's held for seconds while a headset is being (re)opened
+        index, name = self.mics.pick(self.cfg["mic"])
+        bad, until = self.bad_mic
+        if Mics.score(name or "") != 2 or (name == bad and time.time() < until):
+            return None
+        mic = self.mic
+        if mic and mic.device == index and mic.alive and time.time() - mic.last_audio < 0.5:
+            return None  # already awake
+        builtin = next(((i, n) for i, n in self.mics.devices if Mics.score(n) == 1), None)
+        if not builtin:
+            return None
+        try:
+            mic = open_mic(builtin[0], timeout=1.0)
+            if mic.wait_audio(0.5):
+                return mic, builtin[1]
+            mic.close()
+        except Exception as e:
+            log("Bridge mic failed:", repr(e))
+        return None
+
+    def _wake_headset(self, session, bridge):
+        """Open the headset in the background and move the recording over to it."""
+        try:
+            # Reopening a headset that's slow to wake costs 7-15 s, so while the
+            # laptop mic is recording, give it longer to start sending first.
+            mic = self._ready_mic(patience=5.0)
+            if session.switch_mic(mic):
+                log(f"Switched to {self.mic_name} after {time.time() - session.started:.1f}s")
+        except Exception as e:
+            log("Headset didn't wake; recording stays on the laptop mic:", repr(e))
+            session.stopping.wait()
+        bridge.close()
+
     def _open_session(self):
         try:
-            mic = self._ready_mic()
-            session = Session(self.engine, lambda lv: self.ui.put(("level", lv)), mic)
+            bridge = self._bridge_mic()
+            if bridge:
+                mic, name = bridge
+                session = Session(self.engine, lambda lv: self.ui.put(("level", lv)), mic)
+                log(f"Recording on {name} while the headset wakes up")
+                threading.Thread(target=self._wake_headset, args=(session, mic), daemon=True).start()
+            else:
+                mic = self._ready_mic()
+                session = Session(self.engine, lambda lv: self.ui.put(("level", lv)), mic)
             session.late_start = time.time() - self.press_time > 0.6
         except Exception as e:
             log("Microphone error:", repr(e))

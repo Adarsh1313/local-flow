@@ -9,6 +9,11 @@ pystray
 pillow
 uiautomation
 wordfreq
+# voice Commands: media controls and volume
+winrt-Windows.Media.Control
+winrt-Windows.Foundation
+winrt-Windows.Foundation.Collections
+pycaw
 # GPU (NVIDIA) support for faster-whisper
 nvidia-cublas-cu12
 nvidia-cudnn-cu12==9.*

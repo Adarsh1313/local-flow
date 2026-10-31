@@ -38,6 +38,19 @@ def test_real_icons_for_an_app_and_a_folder(notepad, tmp_path):
         assert im.getchannel("A").getextrema()[1] > 200  # something opaque was drawn
 
 
+def test_volume_reads_and_sets_and_is_put_back():
+    import winactions
+    a = winactions.Actions()
+    before = a.volume()
+    try:
+        a.set_volume(before - 1 if before else 1)
+        assert a.volume() == (before - 1 if before else 1)
+        assert a.change_volume(+1) == (before if before else 2)
+    finally:
+        a.set_volume(before)
+    assert a.volume() == before
+
+
 def test_launch_then_switch_finds_the_running_window(notepad):
     import winactions
     a = winactions.Actions()

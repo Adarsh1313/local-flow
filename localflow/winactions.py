@@ -179,7 +179,72 @@ def icon_image(target_or_path, size):
     return im if im.size == (size, size) else im.resize((size, size), Image.LANCZOS)
 
 
+# ------------------------------------------------------------- media and volume
+
+def _media_sessions():
+    """(current session, all sessions) from the Windows media pop-up. Works with any
+    player that shows there (Spotify Free included), offline."""
+    import asyncio
+    from winrt.windows.media.control import GlobalSystemMediaTransportControlsSessionManager as Manager
+
+    async def get():
+        m = await Manager.request_async()
+        return m.get_current_session(), list(m.get_sessions())
+    return asyncio.run(get())
+
+
+def _run_media(session, action):
+    import asyncio
+    call = {"pause": session.try_pause_async, "play": session.try_play_async,
+            "next": session.try_skip_next_async, "previous": session.try_skip_previous_async}[action]
+
+    async def go():
+        return await call()
+    return asyncio.run(go())
+
+
+def _speakers():
+    import comtypes
+    from pycaw.pycaw import AudioUtilities
+    comtypes.CoInitialize()
+    return AudioUtilities.GetSpeakers().EndpointVolume
+
+
 class Actions:
+    def __init__(self, catalog=lambda: []):
+        self.catalog = catalog   # the current Targets, to name media players
+
+    def media(self, action, target=None):
+        """Play/pause/next/previous on the named player, else whatever the media pop-up
+        shows. Returns the player's name, or None when nothing is playing."""
+        current, sessions = _media_sessions()
+        if target:
+            session = next((s for s in sessions if s.source_app_user_model_id == target.id), None)
+        else:
+            session = current
+        if not session:
+            return None
+        _run_media(session, action)
+        aumid = session.source_app_user_model_id
+        app = next((t for t in self.catalog() if t.id == aumid), None)
+        return app.name if app else Path(aumid.split("!")[0]).stem.split("_")[0]
+
+    def set_volume(self, level):
+        _speakers().SetMasterVolumeLevelScalar(max(0, min(100, level)) / 100, None)
+
+    def change_volume(self, step):
+        ep = _speakers()
+        level = round(ep.GetMasterVolumeLevelScalar() * 100) + step
+        level = max(0, min(100, level))
+        ep.SetMasterVolumeLevelScalar(level / 100, None)
+        return level
+
+    def volume(self):
+        return round(_speakers().GetMasterVolumeLevelScalar() * 100)
+
+    def mute(self, on):
+        _speakers().SetMute(1 if on else 0, None)
+
     def switch_to(self, target):
         wins = windows_of(target)
         if not wins:

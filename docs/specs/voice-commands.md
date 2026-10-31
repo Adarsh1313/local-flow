@@ -231,8 +231,8 @@ ones built from the apps the user opens most. Everything runs offline with no AI
       Wake word (Catalog from Start apps, real Actions launch/switch, plain text card)
 - [x] 2. Command card visuals: ice-blue listening wave, real icons, slide/fade, hold
       timings, hover-to-keep, success/No match sounds, No match and Couldn't open
-- [ ] 3. Early end on ~0.7 s pause for complete Commands
-- [ ] 4. Media (any player + named app) and volume Commands
+- [x] 3. Early end on ~0.7 s pause for complete Commands
+- [x] 4. Media (any player + named app) and volume Commands
 - [ ] 5. Places (known folders, This PC, drives, settings pages, websites) and search
       (Spotify, YouTube, web)
 - [ ] 6. Close / minimise + Confirmation card (icon row, counts, window-title tips,

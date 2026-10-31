@@ -724,13 +724,28 @@ class Session:
         self.stopping.set()
         self.mic.detach()
 
+    def peek(self):
+        """Transcribe what's been said so far without stopping (the early Command check).
+        Only for short turns: nothing has been committed yet."""
+        a = self._audio()
+        if self.committed or not len(a) or len(a) >= self.MIN_CHUNK * SR:
+            return ""  # long turns are dictation anyway, and the worker may be transcribing
+        seg = trim_silence(a, speech_threshold(frame_rms(a)))
+        text = self.engine.transcribe(normalize(seg)) if seg is not None else ""
+        self.peeked = (len(a), text)
+        return text
+
     def finish(self):
         self._close()
         self.worker.join()
         a = self._audio()
         self.duration = len(a) / SR
         self.audio = a
-        self._commit(a[self.committed:], speech_threshold(frame_rms(a)))
+        n, text = getattr(self, "peeked", (-1, ""))
+        if not self.committed and 0 <= len(a) - n < 0.3 * SR and text:
+            self.parts = [text]  # nothing new since the early check: reuse it
+        else:
+            self._commit(a[self.committed:], speech_threshold(frame_rms(a)))
         save_wav(LAST_AUDIO_PATH, a)
         return join_pieces(self.parts)
 
@@ -2264,7 +2279,7 @@ class CommandCard:
                     self.icons[card.icon] = None
             if self.icons[card.icon]:
                 return self.icons[card.icon], None
-        ch = {"no_match": "", "failed": ""}.get(card.kind, "")
+        ch = card.glyph or {"no_match": "", "failed": ""}.get(card.kind, "")
         return shape(size, size, px(RADIUS["control"]), T["control"]), ch
 
     def show(self, card):
@@ -3098,6 +3113,7 @@ class App:
     DOUBLE_TAP = 0.45     # max seconds between the two taps
     TAP = 0.3             # a press shorter than this is a tap, not a hold
     HANDSFREE_MAX = 600   # stop hands-free automatically after 10 minutes
+    EARLY_PAUSE = 0.7     # a pause this long checks whether a Command is already complete
 
     def __init__(self):
         self.cfg = load_config()
@@ -3117,7 +3133,8 @@ class App:
         self.ambient = AmbientListener(self)
         self.mics.before_restart = lambda: (self._close_mic(), self.ambient.close_mic())
         self.wake_session = False   # the current dictation was started by the wake word
-        self.commands = commands.Context(catalog=[], actions=winactions.Actions(), log=log)
+        self.peeked_at = 0          # last_voice time of the pause already checked for a Command
+        self.commands = commands.Context(catalog=[], actions=winactions.Actions(lambda: self.commands.catalog), log=log)
         self.last_voice = 0
         self.state_lock = threading.Lock()
         self.starting = False      # mic is being opened in the background
@@ -3177,6 +3194,21 @@ class App:
         threading.Thread(target=self._load_commands, daemon=True).start()
         self.root.after(30, self._tick)
 
+    def _early_check(self, session):
+        """On a short pause in a wake-word turn: if what's been said is already a whole
+        Command ("open Spotify"), end the turn now instead of waiting the full pause."""
+        try:
+            text = session.peek()
+        except Exception as e:
+            log("Early command check failed:", repr(e))
+            return
+        if text and commands.is_complete_command(text, self.commands):
+            self.post("call", lambda: self.session is session and self._end_turn_early())
+
+    def _end_turn_early(self):
+        self.handsfree = False
+        self._stop()
+
     def _load_commands(self):
         """Lists the installed apps for Commands (takes ~1 s, so off the UI thread)."""
         try:
@@ -3233,6 +3265,10 @@ class App:
         self.overlay.command_mode = self.wake_session and self.cfg["commands_enabled"]
         if self.session and self.wake_session:
             quiet = now - self.last_voice
+            if self.cfg["commands_enabled"] and getattr(self, "wake_heard_voice", False) \
+                    and quiet > self.EARLY_PAUSE and self.peeked_at != self.last_voice:
+                self.peeked_at = self.last_voice   # once per pause
+                threading.Thread(target=self._early_check, args=(self.session,), daemon=True).start()
             if getattr(self, "wake_heard_voice", False) and quiet > self.cfg["ambient_end_silence"]:
                 self.handsfree = False
                 self._stop()

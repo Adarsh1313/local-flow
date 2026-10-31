@@ -10,6 +10,7 @@ import ctypes.wintypes
 import difflib
 import functools
 import json
+import logging
 import math
 import os
 import queue
@@ -68,6 +69,7 @@ import commands
 import dictionary
 import starter
 import textfx
+import wake
 import winactions
 from dictionary import Dictionary, extract_corrections, find_span
 from textfx import zipf
@@ -97,6 +99,8 @@ DEFAULTS = {
     "mic": "auto",                 # "auto" = best available, or a microphone name
     "keep_mic_ready_seconds": 60,  # keep the mic open after dictating: no cut-off first words
     "ambient_mode": True,          # listen on the laptop mic for the wake phrase
+    "wake_sensitivity": "normal",   # "low", "normal" or "high"
+    "wake_mic": "",                 # "" = the laptop's own mic
     "wake_phrase": "Hey Jarvis",
     "ambient_end_silence": 2.0,    # seconds of quiet that end a wake-word dictation
     "commands_enabled": True,      # "Hey Jarvis, open Spotify" runs instead of pasting
@@ -120,6 +124,17 @@ Text: {text}"""
 
 def log(*args):
     print(datetime.now().strftime("%H:%M:%S"), *args, flush=True)
+
+
+class _ToLog(logging.Handler):
+    """The pure modules (wake, dictionary) log through `logging`; send it to the same log."""
+    def emit(self, record):
+        log(record.getMessage())
+
+
+logging.getLogger("localflow").addHandler(_ToLog())
+logging.getLogger("localflow").setLevel(logging.INFO)
+logging.getLogger("localflow").propagate = False
 
 
 def load_config():
@@ -345,37 +360,11 @@ class Mics:
 
 # ------------------------------------------------------------- wake word
 #
-# Ambient mode keeps the laptop mic open and watches for short bursts of speech
-# (0.35-3 s, then a pause). Only those are transcribed, with the same speech model,
-# and compared with the wake phrase by how they sound, so "he whispered" still
-# counts as "Hey Wispr" (or whatever phrase you set). Then a hands-free dictation starts and ends after a pause.
-
-def _sound_shape(text):
-    """Rough sound of each word: first letter + consonants ("whispered" -> "wsprd")."""
-    words = re.sub(r"[^a-z ]", " ", text.lower().replace("wh", "w")).split()
-    return [w[0] + re.sub(r"[aeiouy]", "", w[1:]) for w in words]
-
-
-def wake_score(text, phrase):
-    heard, want = _sound_shape(text), _sound_shape(phrase)
-    if not heard or not want or len(heard) > len(want) + 3:
-        return 0.0
-    best = 0.0
-    for i in range(min(2, len(heard))):          # allow one leading "um"
-        if heard[i] != want[0]:                  # "hey"/"he"/"hi" yes, "she"/"a" no
-            continue
-        for k in (len(want), len(want) + 1):
-            part = heard[i:i + k]
-            if part:
-                best = max(best, difflib.SequenceMatcher(None, " ".join(part), " ".join(want)).ratio())
-    return best
-
+# Ambient mode keeps a mic open (the laptop's by default, so a Bluetooth headset isn't
+# held in call mode) and feeds it to a wake detector (wake.py). Then a hands-free
+# dictation starts and ends after a pause.
 
 class AmbientListener:
-    SEG_MIN, SEG_MAX = 0.35, 3.0   # length of speech that could be the wake phrase
-    END_PAUSE = 0.5                # quiet that ends a burst of speech
-    THRESHOLD = 0.85
-
     def __init__(self, app):
         self.app = app
         self.mic = None
@@ -383,8 +372,12 @@ class AmbientListener:
         self.running = False
         self.frames = queue.Queue()
         self.floor = 0.004              # background noise level, adapted as it listens
-        self.last_heard = ""
         self.voice_level = 0.012        # level that counts as speech (for auto-stop)
+        self.detector, self.detector_for = None, None
+
+    @property
+    def last_heard(self):
+        return self.detector.last_heard if self.detector else ""
 
     # -- life cycle
     def start(self):
@@ -398,28 +391,49 @@ class AmbientListener:
         self.close_mic()
         log("Wake word listening stopped")
 
+    def restart(self):
+        """After the wake mic, phrase or sensitivity changed."""
+        self.detector_for = None
+        self.close_mic()
+
     def close_mic(self):
         mic, self.mic = self.mic, None
         if mic:
             mic.close()
 
-    def _laptop_mic(self):
+    def _wake_mic(self):
         mics = self.app.mics
-        name = next((n for n in mics.names() if Mics.score(n) == 1), None) or mics.default
+        chosen = self.app.cfg.get("wake_mic", "")
+        name = (chosen if chosen in mics.names() else None) or \
+            next((n for n in mics.names() if Mics.score(n) == 1), None) or mics.default
         return next((i for i, n in mics.devices if n == name), None), name
 
     def _open(self):
         with self.app.mics.lock:
-            index, name = self._laptop_mic()
+            index, name = self._wake_mic()
             self.mic = open_mic(index)
             self.mic_name = name
         self.mic.attach(self.frames.put)
         log(f"Wake word mic: {name}")
 
+    def _transcribe(self, audio):
+        app = self.app
+        if app.engine is None or app.session or app.starting or app.busy:
+            return ""
+        return app.engine.transcribe(normalize(audio))
+
+    def _detector(self):
+        cfg = self.app.cfg
+        key = (cfg["wake_phrase"], cfg.get("wake_sensitivity", "normal"))
+        if self.detector_for != key:
+            self.detector = wake.make_detector(key[0], key[1], self._transcribe)
+            self.detector_for = key
+            log(f"Wake word detector: {type(self.detector).__name__} ({key[1]})")
+        return self.detector
+
     # -- listening
     def _loop(self):
-        seg, quiet, speaking = [], 0, False
-        pre = deque(maxlen=4)
+        speaking = False
         while self.running:
             try:
                 if self.mic is None or not self.mic.alive:
@@ -442,37 +456,17 @@ class AmbientListener:
             rms = float(np.sqrt((a ** 2).mean()))
             if not speaking and rms < self.floor * 2.5:
                 self.floor = 0.98 * self.floor + 0.02 * max(rms, 0.001)
-            threshold = max(0.006, self.floor * 3)
-            self.voice_level = threshold
-            if rms > threshold:
-                if not speaking:
-                    speaking, seg = True, list(pre)
-                seg.append(a)
-                quiet = 0
-            elif speaking:
-                seg.append(a)
-                quiet += 1
-                if quiet * FRAME / SR >= self.END_PAUSE:
-                    speaking = False
-                    length = (len(seg) - quiet) * FRAME / SR
-                    if self.SEG_MIN <= length <= self.SEG_MAX:
-                        self._check(np.concatenate(seg))
-                    seg = []
-            else:
-                pre.append(a)
-            if len(seg) * FRAME / SR > self.SEG_MAX + 2:
-                speaking, seg = False, []   # long speech: not a wake phrase
-
-    def _check(self, audio):
-        app = self.app
-        if app.engine is None or app.session or app.starting or app.busy:
-            return
-        text = app.engine.transcribe(normalize(audio))
-        score = wake_score(text, app.cfg["wake_phrase"])
-        self.last_heard = text
-        if score >= self.THRESHOLD:
-            log(f"Wake word: heard {text!r} (score {score:.2f})")
-            app.on_wake(self.mic)
+            self.voice_level = max(0.006, self.floor * 3)
+            speaking = rms > self.voice_level
+            try:
+                heard = self._detector().feed(a)
+            except Exception as e:
+                log("Wake word detector failed:", repr(e))
+                self.detector_for, heard = None, False
+            app = self.app
+            if heard and app.engine is not None and not (app.session or app.starting or app.busy):
+                log(f"Wake word: heard {self.last_heard!r}")
+                app.on_wake(self.mic)
 
 
 # --------------------------------------------------------------------- engine
@@ -2857,6 +2851,18 @@ class Panel(Popup):
     def _page_microphone(self, p):
         label(p, "Input", "heading", "muted").pack(fill="x", padx=px(SPACE[1]), pady=(px(SPACE[2]), px(SPACE[1])))
         mic_rows(p, self.app, lambda v: (self.app.set_option("mic", v), self.refresh()))
+        b = group(p, "Wake word", f'Listens for “{self.app.cfg["wake_phrase"]}” while Hands-free is on.')
+        r = row(b, "Sensitivity", "Higher hears quieter speech, and wakes by mistake more often")
+        Segmented(r, (("low", "Low"), ("normal", "Normal"), ("high", "High")),
+                  self.app.cfg["wake_sensitivity"], lambda v: self.app.set_option("wake_sensitivity", v)).pack()
+        wake_mic = self.app.cfg["wake_mic"]
+        laptop = next((n for n in self.app.mics.names() if Mics.score(n) == 1), None)
+        choices = [("", "Laptop mic", "Default · keeps a Bluetooth headset out of call mode")]
+        choices += [(n, n, None) for n in self.app.mics.names() if Mics.score(n) >= 0 and n != laptop]
+        for value, title, desc in choices:
+            right = row(b, title, desc, on_click=lambda v=value: (self.app.set_option("wake_mic", v), self.refresh()))
+            tk.Label(right, text=GLYPH["check"] if wake_mic == value else "", font=F["icon"], fg=T["accent"],
+                     bg=right.cget("bg"), width=2).pack()
         b = group(p, "Startup")
         self._switch(row(b, "Keep the mic ready for a minute",
                          "No cut-off first words. Bluetooth stays in call mode meanwhile"),
@@ -3761,6 +3767,8 @@ class App:
         save_config(self.cfg)
         if key == "ambient_mode":
             (self.ambient.start if value and self.engine else self.ambient.stop)()
+        if key in ("wake_mic", "wake_sensitivity", "wake_phrase"):
+            self.ambient.restart()
         if key == "show_idle_pill":
             self.overlay.show_idle = value
 

@@ -127,6 +127,10 @@ def test_commands_settings_pages_build_offscreen(tmp_path):
     app.commands = commands.Context([spotify], winactions.Actions(), aliases=[commands.Alias("music", "spotify")])
     app.ambient = type("Ambient", (), {"last_heard": "", "running": False, "mic_name": None})()
     app.engine = None
+    names = ["Microphone Array (Realtek(R) Audio)", "Headset (AirPods Pro)"]
+    app.mics = type("Mics", (), {"names": lambda self: names, "pick": lambda self, pref: (None, names[0]),
+                                 "default": names[0], "devices": list(enumerate(names))})()
+    app.mic_name = names[0]
     app.dictionary = dictionary.Dictionary(tmp_path / "dictionary.json")
     app.dictionary.learn("patch", "batch", [])
     app.starter = starter.StarterWords(yours=app.dictionary)
@@ -166,6 +170,8 @@ def test_commands_settings_pages_build_offscreen(tmp_path):
         panel._show_commands_view("add")
         root.update_idletasks()
         assert panel.page_title.cget("text") == "Add a name"
+        panel.open_tab("Microphone")
+        root.update_idletasks()
         panel.open_tab("Dictionary")
         root.update_idletasks()
         assert panel.page_title.cget("text") == "Dictionary"

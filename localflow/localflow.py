@@ -7,7 +7,6 @@ cleanup runs through a local Ollama model. Settings live in config.json.
 
 import ctypes
 import ctypes.wintypes
-import difflib
 import functools
 import json
 import logging
@@ -72,7 +71,6 @@ import textfx
 import wake
 import winactions
 from dictionary import Dictionary, extract_corrections, find_span
-from textfx import zipf
 
 SR = 16000
 FRAME = 800  # 50 ms analysis frames
@@ -2837,6 +2835,7 @@ class Panel(Popup):
             def delete():
                 if btn.text == "Delete all":
                     btn.set_text("Click again to delete")
+                    btn.after(4000, lambda: btn.winfo_exists() and btn.set_text("Delete all"))
                 else:
                     self.app.clips.delete_all()
                     self.refresh()
@@ -2913,8 +2912,8 @@ class Panel(Popup):
                         "You turned it off" if e.get("muted") else why.get(e.get("mode"), "Off"))
                 Button(r, GLYPH["delete"], lambda h=e["heard"]: (d.remove(h), self.refresh()), kind="subtle",
                        icon=True, pad_x=8).pack(side="right")
-                Button(r, "Turn on everywhere", lambda h=e["heard"]: (d.set_mode(h, "always"), self.refresh()),
-                       kind="subtle", font=F["caption"]).pack(side="right")
+                Switch(r, False, lambda on, h=e["heard"]: (d.set_mode(h, "always"), self.refresh())).pack(
+                    side="right", padx=(0, px(SPACE[2])))
 
         b = group(p, "Starter words", "Built-in names and terms the speech model often gets wrong. "
                                       "Your own words above win when both know a word.")

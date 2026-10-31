@@ -21,6 +21,10 @@ SENSITIVITY = {"low": (0.7, 0.9), "normal": (0.5, 0.85), "high": (0.3, 0.75)}
 MODEL_PHRASES = {"hey jarvis": "hey_jarvis"}
 
 
+def _phrase_key(phrase):
+    return " ".join(phrase.lower().split()).strip(" .!,")
+
+
 def _sound_shape(text):
     """Rough sound of each word: first letter + consonants ("whispered" -> "wsprd")."""
     words = re.sub(r"[^a-z ]", " ", text.lower().replace("wh", "w")).split()
@@ -85,7 +89,7 @@ class SpeechWake:
             return False
         score = wake_score(text, self.phrase)
         self.last_heard = text
-        if score < self.threshold and score > 0.4:
+        if score < self.threshold:
             log.info("Wake word: rejected %r (score %.2f)", text, score)
         return score >= self.threshold
 
@@ -99,7 +103,8 @@ class ModelWake:
 
     def __init__(self, phrase, threshold=0.5):
         from openwakeword.model import Model
-        self.name = MODEL_PHRASES[" ".join(phrase.lower().split()).strip(" .!,")]
+        self.phrase = phrase
+        self.name = MODEL_PHRASES[_phrase_key(phrase)]
         self.model = Model(wakeword_models=[self.name], inference_framework="onnx")
         self.threshold = threshold
         self.buf = np.zeros(0, np.int16)
@@ -131,7 +136,7 @@ class ModelWake:
             score = float(self.model.predict(chunk)[self.name])
             if score >= self.threshold and time.time() >= self.quiet_until:
                 heard = True
-                self.last_heard = f"Hey Jarvis ({score:.2f})"
+                self.last_heard = f"{self.phrase} ({score:.2f})"
                 self.quiet_until = time.time() + self.REFRACTORY
                 self.model.reset()
                 self.peak = 0.0
@@ -147,7 +152,7 @@ class ModelWake:
 def make_detector(phrase, sensitivity, transcribe):
     """The model for "Hey Jarvis", speech bursts for any other phrase or a missing model."""
     model_th, speech_th = SENSITIVITY.get(sensitivity, SENSITIVITY["normal"])
-    if " ".join(phrase.lower().split()).strip(" .!,") in MODEL_PHRASES:
+    if _phrase_key(phrase) in MODEL_PHRASES:
         try:
             return ModelWake(phrase, model_th)
         except Exception as e:

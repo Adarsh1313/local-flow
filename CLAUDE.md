@@ -19,7 +19,8 @@ Offline, free hold-to-talk dictation for Windows 11 on modest hardware
 - `docs/user-guide.md`, `docs/screenshots/` — user docs
 
 ## Project rules
-- Everything stays on the machine: no cloud calls, accounts or telemetry.
+- Everything stays on the machine: no cloud calls, accounts or telemetry. Only `setup.bat`
+  downloads (packages, speech and wake-word models), once, at install.
   Optional local Ollama only (`localhost:11434`).
 - Must stay fast on the hardware above: idle CPU ~0, no animation running while idle.
 - Never commit user data files listed in .gitignore (config, history, dictionary, recordings).

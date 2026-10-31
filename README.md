@@ -215,7 +215,9 @@ optional. Full instructions and every setting: **[user guide](docs/user-guide.md
 ## Privacy
 
 Audio is processed on your machine and never sent anywhere; the app makes no network
-requests (the optional AI cleanup talks only to Ollama on `localhost`). History,
+requests (the optional AI cleanup talks only to Ollama on `localhost`). Only `setup.bat`
+downloads, once: the Python packages, the speech model and the "Hey Jarvis" wake-word
+model. History,
 dictionary, notes and optional training recordings stay in the app's folder.
 
 ## Credits

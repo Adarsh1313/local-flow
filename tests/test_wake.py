@@ -70,3 +70,12 @@ def test_model_hears_hey_jarvis_quietly_and_ignores_other_speech(tmp_path):
     for gain in (1.0, 0.1):   # normal and very soft
         assert _woke(ModelWake("Hey Jarvis"), jarvis * gain), gain
         assert not _woke(ModelWake("Hey Jarvis"), other * gain), gain
+
+
+def test_hey_jarvis_falls_back_to_speech_bursts_without_the_model(monkeypatch):
+    import sys
+    from wake import make_detector
+    monkeypatch.setitem(sys.modules, "openwakeword.model", None)   # import fails
+    det = make_detector("Hey Jarvis", "normal", lambda audio: "Hey Jarvis.")
+    assert isinstance(det, SpeechWake)
+    assert any(det.feed(f) for f in burst())

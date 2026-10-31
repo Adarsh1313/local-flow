@@ -242,6 +242,34 @@ After daily use of LocalFlow, a handful of rough edges make it feel worse than W
 - Update README and docs/user-guide.md for the wake sensitivity, Starter words and
   training recordings.
 
+## As built (slices 1–6, 9)
+
+- **Pauses:** the Session marks every part after the first with a pause of at least
+  `PAUSE` (0.7 s), because it only cuts at pauses that long. Each part is cleaned first
+  (fillers, swaps, numbers, voice commands), then the parts are joined, sentences are
+  capitalised, and lists are formatted with the part starts as pause points.
+- **Numbers:** `text2num` with `threshold=10`, plus rules for years, $, ₹, %, times,
+  millions and thousands separators.
+- **Dictionary rules:**
+  - A Fix to a name over an everyday word is swapped everywhere when the heard word's
+    zipf is below 5.0 ("cloud" 4.46).
+  - Above that ("new", "man") it's swapped only next to its learned words until a
+    second Fix.
+  - The one-time re-check of old `off` Fixes never switches an everyday word on
+    everywhere: such a Fix stays "Not applied", or matches only next to its words.
+- **Finding Fixes:** `extract_corrections` no longer drops Fixes between two everyday
+  words. `learn` decides instead. A name counts as rare enough to report.
+- **Starter words:**
+  - Your own Dictionary wins: Starter entries whose heard form you have defined are
+    skipped (`StarterWords(yours=...)`).
+  - Context words in a heard form are kept ("zoom call" becomes "Zoom call").
+  - All swaps run in one regex pass, so swapped-in words aren't swapped again.
+- **Fix card:** reuses the Command card, with the dictionary glyph. A Learned outcome
+  uses kind `done`; Waiting or Refused use `no_match` (longer hold). No sound.
+- **Next session, slice 7:** consider two windows: a per-pixel-alpha
+  (`UpdateLayeredWindow`) backdrop for the rounded shape and shadow, under the
+  existing tk content window, kept inside the straight part of the capsule.
+
 ## Progress
 
 - [x] 1. Move `postprocess` and list formatting into a pure text module with `Options`; tests pin current behaviour

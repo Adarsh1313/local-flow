@@ -79,4 +79,7 @@
   --text-command: 15px;      /* the object line in the command card ("Spotify") */
   --command-card-min: 200px; /* command card width range: fits its text */
   --command-card-max: 300px;
+  --size-confirm-icon: 24px; /* app icons in the "Close 6 apps?" row */
+  --duration-confirm-wait: 6000ms; /* silence that cancels a confirmation */
+  --size-row-icon: 20px;     /* app/folder icons in Commands settings rows */
 }

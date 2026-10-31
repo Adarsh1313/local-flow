@@ -291,6 +291,35 @@ class Actions:
     def launch(self, target):
         os.startfile("shell:AppsFolder\\" + target.id)
 
+    def running_apps(self, catalog):
+        """[(Target, [window titles])] for apps with windows open. Each window belongs to
+        the first app that claims it, so a duplicate Start entry doesn't count twice."""
+        wins, found = app_windows(), {}
+        for t in catalog:
+            mine = [w for w in wins if w[0] not in found and _belongs_to(t, *w[1:])]
+            for w in mine:
+                found[w[0]] = t
+        out = {}
+        for hwnd, exe, cls, title in wins:
+            if hwnd in found:
+                out.setdefault(found[hwnd], []).append(title)
+        return list(out.items())
+
+    def close(self, target):
+        """Politely, like clicking X: apps with unsaved work still ask."""
+        for hwnd, *_ in windows_of(target):
+            user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+
+    def minimise(self, target):
+        for hwnd, *_ in windows_of(target):
+            user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+
+    def minimise_all(self):
+        user32.keybd_event(0x5B, 0, 0, 0)        # Win+M
+        user32.keybd_event(0x4D, 0, 0, 0)
+        user32.keybd_event(0x4D, 0, KEYUP, 0)
+        user32.keybd_event(0x5B, 0, KEYUP, 0)
+
     def open_place(self, target):
         os.startfile(target.path)
 

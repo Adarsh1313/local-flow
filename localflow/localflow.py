@@ -2284,6 +2284,11 @@ class CommandCard:
 
     def show(self, card):
         c = self.canvas
+        self.asking = None
+        c.unbind("<Motion>")
+        c.unbind("<Button-1>")
+        if hasattr(self, "tipwin"):
+            self._tip(None)
         verb_f, obj_f = tkfont.Font(font=F["caption"]), tkfont.Font(font=F["command"])
         text_x = px(self.PAD + self.ICON + self.GAP)
         w = text_x + max(verb_f.measure(card.verb), obj_f.measure(card.obj)) + px(16)
@@ -2310,6 +2315,144 @@ class CommandCard:
         self.until = time.time() + self.HOLD.get(card.kind, 1.6)
         self._schedule()
 
+    # -- Confirmation: "Close 6 apps?", their icons, Cancel and a white Close button
+    CONFIRM_ICON, MAX_ICONS, BTN_H = 24, 6, 28   # --size-confirm-icon
+
+    def ask(self, asked, on_answer):
+        c = self.canvas
+        self.asking, self.on_answer, self.hot = asked, on_answer, None
+        pad, icon_px, gap = px(SPACE[4]), px(self.CONFIRM_ICON), px(SPACE[2])
+        shown = asked.apps[:self.MAX_ICONS]
+        extra = len(asked.apps) - len(shown)
+        row_w = len(shown) * icon_px + (len(shown) - 1 + (1 if extra else 0)) * gap + (icon_px if extra else 0)
+        title_f = tkfont.Font(font=F["command"])
+        self.w = max(px(self.MIN_W), min(px(self.MAX_W) + px(40), 2 * pad + max(row_w, title_f.measure(asked.question))))
+        self.h = pad + px(20) + px(SPACE[3]) + icon_px + px(SPACE[3]) + px(self.BTN_H) + pad
+        c.config(width=self.w, height=self.h)
+        self.regions = []   # (x0, y0, x1, y1, what)
+        self._draw_ask()
+        ov = self.app.overlay
+        self.x = ov.x + ov.w // 2 - self.w // 2
+        self.y = ov.y + ov.h - px(4) - px(40) - px(SPACE[2]) - self.h
+        self.hovered = False
+        self.until = float("inf")   # waits for an answer
+        self.show_t.to(1, MOTION["enter"])
+        c.bind("<Motion>", self._ask_motion)
+        c.bind("<Button-1>", self._ask_click)
+        self._schedule()
+
+    def _draw_ask(self):
+        c, asked = self.canvas, self.asking
+        clear(c)
+        pad, icon_px, gap = px(SPACE[4]), px(self.CONFIRM_ICON), px(SPACE[2])
+        put(c, 0, 0, shape(self.w, self.h, px(RADIUS["card"]), T["surface"], T["popup_border"], 1, T["edge_glow"]))
+        c.create_text(pad, pad + px(10), text=asked.question, fill=T["text"], font=F["command"], anchor="w")
+        y = pad + px(20) + px(SPACE[3])
+        self.regions = []
+        x = pad
+        for t, titles in asked.apps[:self.MAX_ICONS]:
+            img = self._small_icon(t, icon_px)
+            put(c, x, y, img or shape(icon_px, icon_px, px(RADIUS["chip"]), T["control"]))
+            if len(titles) > 1:   # count badge: white capsule, bottom-right
+                bw = max(px(14), tkfont.Font(font=F["small"]).measure(str(len(titles))) + px(6))
+                bx, by = x + icon_px - bw + px(5), y + icon_px - px(9)
+                pill(c, bx, by, bx + bw, by + px(14), T["select"])
+                c.create_text(bx + bw / 2, by + px(7), text=str(len(titles)), fill=T["select_contrast"], font=F["small"])
+            self.regions.append((x, y, x + icon_px, y + icon_px, ("app", t, titles)))
+            x += icon_px + gap
+        extra = len(asked.apps) - self.MAX_ICONS
+        if extra > 0:
+            put(c, x, y, shape(icon_px, icon_px, px(RADIUS["chip"]), T["control"]))
+            c.create_text(x + icon_px / 2, y + icon_px / 2, text=f"+{extra}", fill=T["dim"], font=F["caption"])
+            self.regions.append((x, y, x + icon_px, y + icon_px, ("more", None, [t.name for t, _ in asked.apps[self.MAX_ICONS:]])))
+        # buttons, right-aligned: Cancel (plain), Close (white)
+        by1 = self.h - pad
+        by0 = by1 - px(self.BTN_H)
+        x1 = self.w - pad
+        for label, what, primary in (("Close", "yes", True), ("Cancel", "no", False)):
+            bw = tkfont.Font(font=F["body_strong" if primary else "body"]).measure(label) + px(24)
+            x0 = x1 - bw
+            hot = self.hot == what
+            fill = (T["select_hover"] if hot else T["select"]) if primary else (T["surface_hover"] if hot else "")
+            if fill:
+                put(c, x0, by0, shape(bw, px(self.BTN_H), px(RADIUS["control"]), fill))
+            c.create_text((x0 + x1) / 2, (by0 + by1) / 2, text=label, font=F["body_strong" if primary else "body"],
+                          fill=T["select_contrast"] if primary else T["text"])
+            self.regions.append((x0, by0, x1, by1, ("button", what, None)))
+            x1 = x0 - px(SPACE[2])
+
+    def _small_icon(self, target, size):
+        key = (target.id, size)
+        if key not in self.icons:
+            im = None
+            try:
+                im = winactions.icon_image(target, size)
+            except Exception as e:
+                log("Icon failed:", repr(e))
+            if im is not None:
+                bg = Image.new("RGBA", im.size, rgb(T["surface"]) + (255,))
+                im = ImageTk.PhotoImage(Image.alpha_composite(bg, im))
+            self.icons[key] = im
+        return self.icons[key]
+
+    def _region_at(self, x, y):
+        return next((r[4] for r in self.regions if r[0] <= x <= r[2] and r[1] <= y <= r[3]), None)
+
+    def _ask_motion(self, e):
+        if not getattr(self, "asking", None):
+            return
+        hit = self._region_at(e.x, e.y)
+        hot = hit[1] if hit and hit[0] == "button" else None
+        self.canvas.config(cursor="hand2" if hot else "")
+        if hot != self.hot:
+            self.hot = hot
+            self._draw_ask()
+        if hit and hit[0] in ("app", "more"):
+            r = next(r for r in self.regions if r[4] is hit)
+            self._tip(hit, self.x + (r[0] + r[2]) // 2, self.y)   # above the card, not over its question
+        else:
+            self._tip(None)
+
+    def _ask_click(self, e):
+        hit = self._region_at(e.x, e.y)
+        if getattr(self, "asking", None) and hit and hit[0] == "button":
+            self.asking = None
+            self._tip(None)
+            self.canvas.unbind("<Motion>")
+            self.canvas.unbind("<Button-1>")
+            self.on_answer(hit[1] == "yes")
+
+    def _tip(self, hit, cx=0, top=0):
+        """Which windows an app has open (tab, folder or file name), above its icon."""
+        if not hasattr(self, "tipwin"):
+            self.tipwin = tk.Toplevel(self.app.root)
+            self.tipwin.overrideredirect(True)
+            self.tipwin.attributes("-topmost", True, "-transparentcolor", KEY)
+            self.tipcanvas = tk.Canvas(self.tipwin, bg=KEY, highlightthickness=0)
+            self.tipcanvas.pack()
+            self.tipwin.geometry("1x1+-20000+-20000")
+            self.tipwin.update_idletasks()
+            set_ex_style(self.tipwin, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT)
+        if not hit:
+            self.tipwin.geometry("+-20000+-20000")
+            return
+        kind, t, titles = hit
+        head = t.name if kind == "app" else "Also closing"
+        lines = titles[:4] + ([f"+{len(titles) - 4} more"] if len(titles) > 4 else [])
+        f, hf = tkfont.Font(font=F["caption"]), tkfont.Font(font=F["caption"])
+        lines = [l if f.measure(l) < px(220) else l[:40] + "…" for l in lines]
+        w = min(px(240), max(f.measure(l) for l in [head] + lines) + px(SPACE[3]) * 2)
+        lh = px(16)
+        h = px(SPACE[2]) * 2 + lh * (1 + len(lines))
+        c = self.tipcanvas
+        c.config(width=w, height=h)
+        clear(c)
+        put(c, 0, 0, shape(w, h, px(RADIUS["control"]), T["surface"], T["popup_border"]))
+        c.create_text(px(SPACE[3]), px(SPACE[2]) + lh / 2, text=head, fill=T["muted"], font=F["caption"], anchor="w")
+        for i, line in enumerate(lines, 1):
+            c.create_text(px(SPACE[3]), px(SPACE[2]) + lh * i + lh / 2, text=line, fill=T["text"], font=F["caption"], anchor="w")
+        self.tipwin.geometry(f"{w}x{h}+{cx - w // 2}+{top - h - px(SPACE[2])}")
+
     def _place(self, k):
         rise = px(MOTION["rise"]) * (1 - k)
         self.win.geometry(f"{self.w}x{self.h}+{self.x}+{round(self.y + rise)}")
@@ -2331,6 +2474,8 @@ class CommandCard:
 
     def _leave(self):
         self.hovered = False
+        if hasattr(self, "tipwin"):
+            self._tip(None)
         self.until = max(self.until, time.time() + 0.8)
 
     def hide(self):
@@ -3114,6 +3259,7 @@ class App:
     TAP = 0.3             # a press shorter than this is a tap, not a hold
     HANDSFREE_MAX = 600   # stop hands-free automatically after 10 minutes
     EARLY_PAUSE = 0.7     # a pause this long checks whether a Command is already complete
+    CONFIRM_WAIT = 6.0    # --duration-confirm-wait: silence that cancels a Confirmation
 
     def __init__(self):
         self.cfg = load_config()
@@ -3134,6 +3280,8 @@ class App:
         self.mics.before_restart = lambda: (self._close_mic(), self.ambient.close_mic())
         self.wake_session = False   # the current dictation was started by the wake word
         self.peeked_at = 0          # last_voice time of the pause already checked for a Command
+        self.answer_turn = False    # the current turn is a yes/no for a Confirmation
+        self.asking = None          # the Confirmation waiting for an answer
         self.commands = commands.Context(catalog=[], actions=winactions.Actions(lambda: self.commands.catalog), log=log)
         self.last_voice = 0
         self.state_lock = threading.Lock()
@@ -3222,6 +3370,12 @@ class App:
         out = commands.handle(text, self.commands)
         if isinstance(out, commands.Dictation):
             return False
+        if isinstance(out, commands.NeedsConfirmation):
+            log(f"Command: {text!r} -> asks {out.question}")
+            self.asking = out
+            self.post("overlay", "idle")
+            self.post("ask", out)
+            return True
         card = out.card
         log(f"Command: {text!r} -> {type(out).__name__} {card.verb} {card.obj}")
         if card.kind == "done":
@@ -3265,7 +3419,13 @@ class App:
         self.overlay.command_mode = self.wake_session and self.cfg["commands_enabled"]
         if self.session and self.wake_session:
             quiet = now - self.last_voice
-            if self.cfg["commands_enabled"] and getattr(self, "wake_heard_voice", False) \
+            if self.answer_turn:
+                if self.wake_heard_voice and quiet > self.EARLY_PAUSE:
+                    self.handsfree = False
+                    self._stop()
+                elif not self.wake_heard_voice and now - self.press_time > self.CONFIRM_WAIT:
+                    self.on_escape()   # silence: keep the apps open
+            elif self.cfg["commands_enabled"] and getattr(self, "wake_heard_voice", False) \
                     and quiet > self.EARLY_PAUSE and self.peeked_at != self.last_voice:
                 self.peeked_at = self.last_voice   # once per pause
                 threading.Thread(target=self._early_check, args=(self.session,), daemon=True).start()
@@ -3367,6 +3527,39 @@ class App:
     def _ui_card(self, card):
         self.card.show(card)
 
+    def _ui_ask(self, asked):
+        """Show the Confirmation and listen for yes/no once this turn has finished."""
+        self.card.ask(asked, self._answered)
+
+        def listen():
+            if self.asking is not asked:
+                return
+            if self.busy or self.session or self.starting:
+                self.root.after(50, listen)
+                return
+            mic = self.ambient.mic if self.ambient.running else None
+            if mic is not None:
+                threading.Thread(target=self.on_wake, args=(mic, True), daemon=True).start()
+            else:   # no wake-word mic: the buttons answer, silence still cancels
+                self.root.after(int(self.CONFIRM_WAIT * 1000), lambda: self._answered(False, asked))
+        listen()
+
+    def _answered(self, yes, asked=None):
+        """A Confirmation was answered (voice, button, silence). Any thread; runs once."""
+        asked = asked or self.asking
+        if asked is None or self.asking is not asked:
+            return
+        self.asking = None
+        if self.answer_turn and self.session:
+            self.post("call", self.on_escape)   # a button click ends the listening turn
+
+        def run():
+            out = commands.confirm(asked, yes, self.commands)
+            if yes:
+                self._beep(1320, 30)
+            self.post("card", out.card)
+        threading.Thread(target=run, daemon=True).start()
+
     def _ui_level(self, level):
         self.overlay.push_level(level)
 
@@ -3429,15 +3622,17 @@ class App:
         # or Windows may stop sending it key presses.
         threading.Thread(target=self._open_session, daemon=True).start()
 
-    def on_wake(self, mic):
-        """Called by the listener (its thread) when it hears the wake phrase."""
+    def on_wake(self, mic, answer=False):
+        """Called by the listener (its thread) when it hears the wake phrase. With
+        answer=True it opens a short turn for a yes/no Confirmation instead (no chime)."""
         with self.state_lock:
             if self.session or self.starting or self.busy:
                 return
             self.starting = True
         self.watcher.cancel()
-        for freq, ms in ((660, 70), (990, 110)):  # always play: it's your cue to talk
-            winsound.Beep(freq, ms)
+        if not answer:
+            for freq, ms in ((660, 70), (990, 110)):  # always play: it's your cue to talk
+                winsound.Beep(freq, ms)
         try:
             mic.detach()
             session = Session(self.engine, self._wake_level, mic)
@@ -3450,7 +3645,7 @@ class App:
         self.press_time = self.last_voice = now
         self.wake_heard_voice = False
         with self.state_lock:
-            self.handsfree, self.wake_session = True, True
+            self.handsfree, self.wake_session, self.answer_turn = True, True, answer
             self.session, self.starting = session, False
 
     def _wake_level(self, level):
@@ -3575,11 +3770,14 @@ class App:
 
     def on_escape(self):
         if self.handsfree and self.session:
+            answering, self.answer_turn = self.answer_turn, False
+            if answering:
+                self._answered(False)   # the card says "Kept open"
             self.wake_session = False
             self.handsfree = False
             self.session.cancel()
             self.session = None
-            self.post("overlay", "message", "Cancelled", 1.2)
+            self.post("overlay", "idle" if answering else "message", "" if answering else "Cancelled", 1.2)
 
     def on_release(self):
         if self.ignore_release:
@@ -3609,19 +3807,26 @@ class App:
 
     def _stop(self):
         handsfree_turn, self.wake_session = self.wake_session, False
+        answer_turn, self.answer_turn = self.answer_turn, False
         session, self.session = self.session, None
         if not session:
             return
         self.busy = True
         self._beep(660)
         self.post("overlay", "busy")
-        threading.Thread(target=self._finish, args=(session, handsfree_turn), daemon=True).start()
+        threading.Thread(target=self._finish, args=(session, handsfree_turn, answer_turn), daemon=True).start()
 
-    def _finish(self, session, handsfree_turn=False):
+    def _finish(self, session, handsfree_turn=False, answer_turn=False):
         try:
             t = time.time()
             text = session.finish()
             asr_time = time.time() - t
+            if answer_turn:
+                reply = commands.answer(text)
+                log(f"Confirmation answer: {text!r} -> {reply}")
+                self.post("overlay", "idle")
+                self._answered(reply == "yes")
+                return
             if handsfree_turn and self.cfg["commands_enabled"] and text and self._run_command(text):
                 return
             if self.cfg["llm_cleanup"] and text:

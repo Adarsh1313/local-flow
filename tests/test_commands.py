@@ -1,5 +1,6 @@
 """Behaviour of a Hands-free turn: heard text in, outcome and Windows actions out."""
-from commands import Context, Dictation, Done, Failed, NoMatch, Target, handle, is_complete_command
+from commands import (Context, Dictation, Done, Failed, NeedsConfirmation, NoMatch, Target, answer, confirm,
+                      handle, is_complete_command)
 
 
 class FakeActions:
@@ -38,6 +39,20 @@ class FakeActions:
 
     def open_url(self, url):
         self.calls.append(("open_url", url))
+
+    windows = {}   # target id -> open window titles
+
+    def running_apps(self, catalog):
+        return [(t, self.windows[t.id]) for t in catalog if t.id in self.windows]
+
+    def close(self, target):
+        self.calls.append(("close", target.id))
+
+    def minimise(self, target):
+        self.calls.append(("minimise", target.id))
+
+    def minimise_all(self):
+        self.calls.append(("minimise_all",))
 
 
 SPOTIFY = Target("spotify", "Spotify")
@@ -163,6 +178,60 @@ def test_search_spotify_youtube_and_the_web():
         ("open_url", "https://www.youtube.com/results?search_query=cat+videos"),
         ("open_url", "https://www.google.com/search?q=how+tall+is+everest"),
         ("open_url", "https://www.google.com/search?q=weather")]
+
+
+LOCALFLOW = Target("localflow", "LocalFlow")
+
+
+def busy_desk():
+    actions = FakeActions()
+    actions.windows = {"spotify": ["Spotify Premium"], "chrome": ["Inbox - Gmail", "YouTube"],
+                       "vscode": ["local-flow"], "localflow": ["LocalFlow"]}
+    return actions
+
+
+def test_close_one_app_closes_it_without_asking():
+    actions = busy_desk()
+    out = handle("Close Spotify.", ctx(actions))
+    assert (out.card.verb, out.card.obj) == ("Closing", "Spotify")
+    assert actions.calls == [("close", "spotify")]
+
+
+def test_closing_an_app_that_isnt_open_says_so():
+    out = handle("close spotify", ctx(FakeActions()))
+    assert isinstance(out, NoMatch)
+    assert (out.card.verb, out.card.obj) == ("Not open", "Spotify")
+
+
+def test_minimise_one_app_or_everything():
+    actions = busy_desk()
+    assert handle("minimize chrome", ctx(actions)).card.verb == "Minimised"
+    assert handle("minimise everything", ctx(actions)).card.obj == "Everything"
+    assert actions.calls == [("minimise", "chrome"), ("minimise_all",)]
+
+
+def test_closing_several_apps_asks_first_and_never_closes_localflow():
+    actions = busy_desk()
+    out = handle("close everything", ctx(actions, catalog=(SPOTIFY, CHROME, VSCODE, LOCALFLOW)))
+    assert isinstance(out, NeedsConfirmation)
+    assert out.question == "Close 3 apps?"
+    assert [(t.name, titles) for t, titles in out.apps] == [
+        ("Spotify", ["Spotify Premium"]), ("Google Chrome", ["Inbox - Gmail", "YouTube"]), ("Visual Studio Code", ["local-flow"])]
+    assert actions.calls == []  # nothing closes before the answer
+
+
+def test_saying_yes_closes_them_and_no_or_silence_keeps_them():
+    actions = busy_desk()
+    asked = handle("close all apps", ctx(actions))
+    assert answer("Yeah, do it.") == "yes"
+    assert answer("no thanks") == "no"
+    assert answer("") == "no"
+    assert answer("what's the weather") is None
+    out = confirm(asked, True, ctx(actions))
+    assert (out.card.verb, out.card.obj) == ("Closed", "3 apps")
+    assert sorted(actions.calls) == [("close", "chrome"), ("close", "spotify"), ("close", "vscode")]
+    kept = confirm(asked, False, ctx(busy_desk()))
+    assert (kept.card.verb, kept.card.obj) == ("Kept open", "3 apps")
 
 
 def test_speech_without_a_command_word_is_dictation():

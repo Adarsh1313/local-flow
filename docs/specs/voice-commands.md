@@ -235,7 +235,7 @@ ones built from the apps the user opens most. Everything runs offline with no AI
 - [x] 4. Media (any player + named app) and volume Commands
 - [x] 5. Places (known folders, This PC, drives, settings pages, websites) and search
       (Spotify, YouTube, web)
-- [ ] 6. Close / minimise + Confirmation card (icon row, counts, window-title tips,
+- [x] 6. Close / minimise + Confirmation card (icon row, counts, window-title tips,
       voice yes/no, buttons, silence cancels)
 - [ ] 7. Hold-to-talk with no text field runs Commands
 - [ ] 8. Command log, duplicate ranking, Suggested Aliases and top apps, user-added apps

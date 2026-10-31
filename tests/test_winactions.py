@@ -70,3 +70,17 @@ def test_launch_then_switch_finds_the_running_window(notepad):
     a.launch(notepad)
     assert wait_for(lambda: winactions.windows_of(notepad))
     assert a.switch_to(notepad) is True
+
+
+def test_running_apps_minimise_and_close(notepad):
+    import winactions
+    a = winactions.Actions()
+    if not winactions.windows_of(notepad):
+        a.launch(notepad)
+        assert wait_for(lambda: winactions.windows_of(notepad))
+    assert notepad in dict(a.running_apps([notepad]))
+    a.minimise(notepad)
+    hwnd = winactions.windows_of(notepad)[0][0]
+    assert wait_for(lambda: winactions.user32.IsIconic(hwnd))
+    a.close(notepad)
+    assert wait_for(lambda: not winactions.windows_of(notepad))

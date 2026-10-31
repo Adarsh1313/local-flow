@@ -46,6 +46,13 @@ class Failed:
     card: Card
 
 
+@dataclass(frozen=True)
+class NeedsConfirmation:
+    """A Command that closes several apps waits for a yes or no."""
+    question: str      # "Close 6 apps?"
+    apps: list         # [(Target, [window titles])]
+
+
 @dataclass
 class Context:
     catalog: list
@@ -127,6 +134,17 @@ GLYPH_SEARCH = ""
 PLACE_GLYPHS = {"folder": "", "settings": "", "website": ""}  # when the shell has no icon
 
 
+CLOSE_VERBS = ("close", "quit", "exit")
+MINIMISE_VERBS = ("minimise", "minimize", "hide")
+CLOSE_ALL = {"close everything", "close all", "close all apps", "close all windows", "close all the apps"}
+MINIMISE_ALL = {"minimise everything", "minimize everything", "minimise all", "minimize all",
+                "show desktop", "show the desktop", "hide everything"}
+NEVER_CLOSE = {"localflow"}            # the assistant stays available
+YES = {"yes", "yeah", "yep", "sure", "ok", "okay", "do it", "close them", "go ahead", "confirm", "yes please"}
+NO = {"no", "nope", "cancel", "stop", "dont", "keep them", "never mind", "no thanks"}
+GLYPH_MINIMISE, GLYPH_CLOSED, GLYPH_KEPT = "", "", ""
+
+
 def understand(heard, ctx):
     """What the turn asks for: an Intent, a NoMatch, or None for Dictation. Never acts."""
     words = normalise(heard)
@@ -150,6 +168,15 @@ def understand(heard, ctx):
         if words.startswith(phrase + " "):
             t = best_target(words[len(phrase) + 1:], ctx.catalog)
             return Intent("media", t, action=MEDIA_VERBS[phrase]) if t else None
+    if words in CLOSE_ALL:
+        return Intent("close_all")
+    if words in MINIMISE_ALL:
+        return Intent("minimise_all")
+    for verbs, kind in ((CLOSE_VERBS, "close"), (MINIMISE_VERBS, "minimise")):
+        for verb in verbs:
+            if words.startswith(verb + " "):
+                t = best_target(words[len(verb) + 1:], [t for t in ctx.catalog if t.kind == "app"])
+                return Intent(kind, t) if t else NoMatch(Card("No app called", words[len(verb) + 1:], kind="no_match"))
     for verb in OPEN_VERBS:
         if words.startswith(verb + " "):
             name = words[len(verb) + 1:]
@@ -203,6 +230,24 @@ def carry_out(intent, ctx):
         a.mute(intent.kind == "mute")
         return Done(Card("Muted" if intent.kind == "mute" else "Sound", "Sound" if intent.kind == "mute" else "On",
                          glyph=GLYPH_MUTE if intent.kind == "mute" else GLYPH_VOLUME))
+    if intent.kind == "minimise_all":
+        a.minimise_all()
+        return Done(Card("Minimised", "Everything", glyph=GLYPH_MINIMISE))
+    if intent.kind == "close_all":
+        apps = closable(ctx)
+        if len(apps) >= 2:
+            return NeedsConfirmation(f"Close {len(apps)} apps?", apps)
+        if not apps:
+            return NoMatch(Card("Nothing", "to close", kind="no_match"))
+        intent = Intent("close", apps[0][0])
+    if intent.kind in ("close", "minimise"):
+        t = intent.target
+        if not any(r[0].id == t.id for r in a.running_apps([t])):
+            return NoMatch(Card("Not open", t.name, t.id, "no_match"))
+        if normalise(t.name).replace(" ", "") in NEVER_CLOSE and intent.kind == "close":
+            return NoMatch(Card("Can't close", t.name, t.id, "no_match"))
+        (a.close if intent.kind == "close" else a.minimise)(t)
+        return Done(Card("Closing" if intent.kind == "close" else "Minimised", t.name, t.id))
     t = intent.target
     if t.kind != "app":
         try:
@@ -219,6 +264,35 @@ def carry_out(intent, ctx):
         ctx.log(f"Couldn't open {t.name}: {e!r}")
         return Failed(Card("Couldn't open", t.name, t.id, "failed"))
     return Done(Card("Opening", t.name, t.id))
+
+
+def closable(ctx):
+    return [(t, titles) for t, titles in ctx.actions.running_apps([t for t in ctx.catalog if t.kind == "app"])
+            if normalise(t.name).replace(" ", "") not in NEVER_CLOSE]
+
+
+def answer(heard):
+    """A spoken reply to a Confirmation: "yes", "no" (silence is no), or None if unclear."""
+    words = normalise(heard)
+    if not words:
+        return "no"
+    for phrase, reply in sorted([(p, "yes") for p in YES] + [(p, "no") for p in NO], key=lambda x: -len(x[0])):
+        if words == phrase or words.startswith(phrase + " "):
+            return reply
+    return None
+
+
+def confirm(asked, yes, ctx):
+    """Carry out (or drop) what a Confirmation asked about."""
+    n = f"{len(asked.apps)} apps"
+    if not yes:
+        return Done(Card("Kept open", n, glyph=GLYPH_KEPT))
+    for t, _ in asked.apps:
+        try:
+            ctx.actions.close(t)
+        except Exception as e:
+            ctx.log(f"Couldn't close {t.name}: {e!r}")
+    return Done(Card("Closed", n, glyph=GLYPH_CLOSED))
 
 
 def handle(heard, ctx):

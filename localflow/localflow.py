@@ -2901,11 +2901,13 @@ class Panel(Popup):
                 Button(r, "Turn off", lambda h=e["heard"]: (d.set_mode(h, "off"), self.refresh()), kind="subtle",
                        font=F["caption"]).pack(side="right")
         if off:
-            b = group(p, f"Not applied · {len(off)}", "Everyday words would change normal sentences "
-                                                      "(\"new\" in \"a new idea\"), so these stay off. "
-                                                      "Fixing one again next to the same word turns it on there.")
+            b = group(p, f"Not applied · {len(off)}", "Fixes that would change everyday words "
+                                                      "(\"new\" in \"a new idea\"). Fixing the same word "
+                                                      "again turns it on, or turn one on here.")
+            why = {"waiting": "Waiting for you to fix it once more"}
             for e in newest(off):
-                r = row(b, f"{e['heard']}  →  {e['wanted']}", "Off")
+                r = row(b, f"{e['heard']}  →  {e['wanted']}",
+                        "You turned it off" if e.get("muted") else why.get(e.get("mode"), "Off"))
                 Button(r, GLYPH["delete"], lambda h=e["heard"]: (d.remove(h), self.refresh()), kind="subtle",
                        icon=True, pad_x=8).pack(side="right")
                 Button(r, "Turn on everywhere", lambda h=e["heard"]: (d.set_mode(h, "always"), self.refresh()),
@@ -4100,7 +4102,8 @@ class App:
         if outcomes:
             best = next((o for o in outcomes if isinstance(o, dictionary.Learned)), outcomes[0])
             verb, obj = dictionary.describe(best)
-            self.post("overlay", "message", f"{verb}: {obj}"[:70], 3)
+            kind = "done" if isinstance(best, dictionary.Learned) else "no_match"
+            self.post("card", commands.Card(verb, obj, kind=kind, glyph=GLYPH["dictionary"]))
         self.post("call", lambda: self.panel.visible and self.panel.refresh())
 
     # -- paste last

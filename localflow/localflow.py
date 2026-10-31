@@ -36,6 +36,7 @@ TRAIN_DIR = APP_DIR / "training"
 LAST_AUDIO_PATH = APP_DIR / "last_recording.wav"
 LOG_PATH = APP_DIR / "localflow.log"
 COMMAND_LOG_PATH = APP_DIR / "commands.jsonl"
+PID_PATH = APP_DIR / "localflow.pid"
 ICON_PATH = APP_DIR / "localflow.ico"
 
 # pythonw has no console, so send prints and errors to a log file.
@@ -87,7 +88,7 @@ DEFAULTS = {
     "paste_last_keys": "ctrl+alt+v",   # opens recent transcripts
     "mic": "auto",                 # "auto" = best available, or a microphone name
     "keep_mic_ready_seconds": 60,  # keep the mic open after dictating: no cut-off first words
-    "ambient_mode": False,         # listen on the laptop mic for the wake phrase
+    "ambient_mode": True,          # listen on the laptop mic for the wake phrase
     "wake_phrase": "Hey Jarvis",
     "ambient_end_silence": 2.0,    # seconds of quiet that end a wake-word dictation
     "commands_enabled": True,      # "Hey Jarvis, open Spotify" runs instead of pasting
@@ -4443,6 +4444,7 @@ class App:
             pass
         self.tray.stop()
         keyboard.unhook_all()
+        release_single_instance()
         self.root.destroy()
         os._exit(0)
 
@@ -4460,8 +4462,15 @@ def acquire_single_instance():
 
 
 def release_single_instance():
+    global _mutex
     if _mutex:
         ctypes.windll.kernel32.CloseHandle(_mutex)
+        _mutex = None
+    try:
+        if PID_PATH.exists() and PID_PATH.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            PID_PATH.unlink()
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":
@@ -4469,5 +4478,6 @@ if __name__ == "__main__":
         ctypes.windll.user32.MessageBoxW(None, "LocalFlow is already running (see the tray icon).",
                                          "LocalFlow", 0x40)
         sys.exit(0)
+    PID_PATH.write_text(str(os.getpid()), encoding="utf-8")
     log("Starting LocalFlow")
     App().run()

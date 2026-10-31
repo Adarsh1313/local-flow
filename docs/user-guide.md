@@ -7,7 +7,7 @@ text is typed wherever your cursor is. No account, no internet, no cost.
 
 1. Install Python 3.12 from python.org.
 2. Double-click `localflow\setup.bat` (creates `.venv`, installs everything and adds
-   LocalFlow to the Start menu).
+   LocalFlow to the Start menu, plus Start/Stop shortcuts on the Desktop).
 3. Open **LocalFlow** from Start or double-click `localflow\run.bat`. The first start downloads the speech model
    (~650 MB, once). After that it starts in about 10 seconds.
 
@@ -21,7 +21,7 @@ turns on **Start with Windows** the first time it runs (switch it off in Setting
 |---|---|
 | Hold to talk | Hold **Right Ctrl**, speak, let go |
 | Hands-free | Double-tap **Right Ctrl**, talk as long as you like, tap again to finish. **Esc** throws it away. Stops by itself after 10 minutes |
-| Wake word (opt-in) | Say **"Hey Jarvis"**, wait for the chime, talk. A 2-second pause finishes it |
+| Wake word (on by default) | Say **"Hey Jarvis"**, wait for the chime, talk. A 2-second pause finishes it |
 
 While you hold the key the pill shows a live waveform; on release it shows three dots
 until the text is pasted. Pressing another key while holding (e.g. Right Ctrl + C)
@@ -87,7 +87,7 @@ specific mic; if it's disconnected, the best available one is used until it's ba
 
 ## Wake word
 
-Settings → General → Wake word → **Start with your voice**. Listens on the laptop mic,
+Settings → General → Wake word → **Start with your voice** is on by default. It listens on the laptop mic,
 so Bluetooth earbuds aren't stuck in call mode; the mic stays on while this is enabled.
 Nothing is recorded or saved while listening: only short bursts of speech (under 3 s,
 then a pause) are transcribed in memory and compared with the phrase by how they sound,
@@ -168,6 +168,7 @@ Most settings are in the Settings window; these are the extra ones.
 | `replacements` | `{}` | Always-on swaps, e.g. `{"cube or net ease": "Kubernetes"}` |
 | `ollama_model` | `qwen2.5:3b` | Model used for AI cleanup |
 | `ambient_end_silence` | `2.0` | Seconds of quiet that end a wake-word dictation |
+| `ambient_mode` | `true` | Keep listening locally for the wake phrase |
 | `commands_enabled` | `true` | Run Commands after the wake word; off means wake-word Dictation only |
 
 ## AI cleanup with Ollama (optional)

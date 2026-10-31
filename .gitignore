@@ -12,6 +12,7 @@ localflow/dictionary.json
 localflow/notes.txt
 localflow/localflow.log
 localflow/commands.jsonl
+localflow/localflow.pid
 localflow/last_recording.wav
 localflow/training/
 localflow/*.tmp

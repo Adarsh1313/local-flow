@@ -62,7 +62,7 @@ cloud sync.
 |---|---|
 | **Hold to talk** | Hold Right Ctrl, speak, release. Pasted into any app |
 | **Hands-free** | Double-tap Right Ctrl; tap again to finish |
-| **Wake word** (opt-in) | Say "Hey Jarvis", wait for the chime, talk; a pause ends it |
+| **Wake word** (on by default) | Say "Hey Jarvis", wait for the chime, talk; a pause ends it |
 | **Offline Commands** | “Hey Jarvis, open Spotify”, “pause”, “volume 30”, “open Downloads”, “close everything” |
 | **Names and Routines** | “music” can mean Spotify; “work mode” can open several apps together |
 | **Clean text** | Punctuation and casing from the model; "um"/"uh" removed; pauses don't break sentences |

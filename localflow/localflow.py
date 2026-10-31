@@ -3990,6 +3990,13 @@ class App:
             self.overlay.show_idle = value
 
     def open_panel(self, page, tab=None, pinned=False):
+        try:
+            valid = (self.panel.win.winfo_exists() and self.panel.notes_root.winfo_exists()
+                     and self.panel.settings_root.winfo_exists())
+        except tk.TclError:
+            valid = False
+        if not valid:
+            self.panel = Panel(self)
         self.panel.show(page, tab=tab, pinned=pinned)
 
     def _load_engine(self):

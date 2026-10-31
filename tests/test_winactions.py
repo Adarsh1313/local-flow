@@ -139,10 +139,17 @@ def test_commands_settings_pages_build_offscreen():
         root.update_idletasks()
         assert app.panel_leave is None and panel.visible
         panel.hide()
+        panel.win.destroy()  # Windows/Tk can invalidate an overlay while it is hidden
+        localflow.App.open_panel(app, "settings", "Commands")
+        root.update_idletasks()
+        assert app.panel is not panel and app.panel.visible
+        app.panel.hide()
+        panel = app.panel
         panel.open_tab("Commands")
         panel._show_commands_view("add")
         root.update_idletasks()
         assert panel.page_title.cget("text") == "Add a name"
     finally:
-        panel.win.destroy()
+        if panel.win.winfo_exists():
+            panel.win.destroy()
         root.destroy()

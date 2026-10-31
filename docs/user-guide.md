@@ -42,10 +42,20 @@ laptops: the keyboard handles it in hardware and Windows never sees it.
   2. Call the bank
   ```
 
-  "First… second…", "number one… number two…" work too, and "bullet point… next
-  point…" makes `-` bullets. It needs at least two items in order, and a bare "one"
-  only counts at the start of a sentence, so "I have one question and two concerns"
-  stays a sentence.
+  "First… second…" and "number one… number two…" work too, and so does speech with
+  no punctuation ("one buy milk two call the bank"). "Bullet point… next point…"
+  makes `-` bullets. A list needs at least two items in order. Numbers that count
+  something stay in a sentence: "I have one question and two concerns". Once a list
+  is open, saying "then" after a pause adds the next point.
+- **Numbers** are written as digits, the way people type them:
+  - "twenty twenty six" → 2026
+  - "the twenty dollar plan" → "the $20 plan"
+  - "fifty percent" → 50%
+  - "at three thirty" → 3:30
+  - "twenty five people" → 25 people
+
+  One to nine stay words in a sentence ("one question"). To turn this off, go to
+  Settings → General → Numbers.
 - **Spoken formatting:** say "new line" or "new paragraph".
 - **Dictionary** swaps in the right spelling for words the model gets wrong (below).
 - **AI cleanup** (optional, off): grammar fixes with a local Ollama model.
@@ -87,12 +97,22 @@ specific mic; if it's disconnected, the best available one is used until it's ba
 
 ## Wake word
 
-Settings → General → Wake word → **Start with your voice** is on by default. It listens on the laptop mic,
-so Bluetooth earbuds aren't stuck in call mode; the mic stays on while this is enabled.
-Nothing is recorded or saved while listening: only short bursts of speech (under 3 s,
-then a pause) are transcribed in memory and compared with the phrase by how they sound,
-so "hey jervis" still counts but "hey there" doesn't. **Last heard** shows the most
-recent burst, to help tune the phrase. Pause briefly after the phrase.
+Settings → General → Wake word → **Start with your voice** is on by default. It
+listens on the laptop mic, so Bluetooth earbuds aren't stuck in call mode. The mic
+stays on while this is enabled. Nothing is recorded or saved while listening.
+
+- **"Hey Jarvis"** is heard by a small offline wake-word model (openWakeWord), so you
+  can say it at a normal speaking volume. It only runs while there's sound, so a quiet
+  room uses almost no CPU.
+- **Any other phrase** is checked a different way. Short bursts of speech (under 3 s,
+  then a pause) are transcribed in memory and compared with the phrase by how they
+  sound, so "hey jervis" still counts but "hey there" doesn't.
+- **Settings → Microphone → Wake word** has two settings:
+  - **Sensitivity**: Low, Normal or High. Higher hears quieter speech, but wakes by
+    mistake more often.
+  - **Mic**: which mic listens for the wake word. The laptop mic is the default.
+- **Last heard** shows the latest wake or near miss. Near misses are also written to
+  `localflow.log`.
 
 ## Commands
 
@@ -143,21 +163,38 @@ such as “clawed” or “cloud” are treated as Claude.
 When the model keeps mishearing a word, the dictionary swaps in the right one.
 
 1. **Automatically:** fix a word in the text box within a minute of dictating
-   ("Sio bhan" → "Siobhan"). LocalFlow reads the box through Windows UI Automation,
-   spots the swap and shows "Learned: …". Works in most browsers and native apps;
-   password fields are skipped.
+   ("Sio bhan" → "Siobhan"). LocalFlow reads the box through Windows UI Automation and
+   spots the Fix. A card then says **Added to dictionary: Siobhan**, or why the Fix
+   wasn't added. This works in most browsers and native apps, and password fields are
+   skipped.
 2. **Fix** in History: edit a transcript and the swapped words are learned.
 3. **Dictionary tab:** add or remove entries yourself.
 
 Rules that keep it from breaking normal sentences:
 
-- Rare words and names are swapped everywhere.
-- A swap for an everyday word ("New" → "Nuvo") only applies next to the words it was
-  learned with ("Nuvo Health"), so "a new idea" stays untouched.
-- Edits between two everyday words ("Thursday" → "Friday") are changes of mind, not
-  mishearings, and aren't learned.
+- Rare words and names are learned at once and swapped everywhere. That includes a
+  name that replaces an everyday word ("cloud" → "Claude").
+- A swap over a very common word ("New" → "Nuvo") only applies next to the words it
+  was learned with ("Nuvo Health"), so "a new idea" stays untouched. Make the same Fix
+  again and it applies everywhere.
+- A Rewording between two everyday words ("patch" → "batch") is learned the second
+  time you make the same Fix, because the first time could be a change of mind.
+- **Not applied** on the Dictionary tab lists Fixes that are saved but not swapped,
+  either waiting for a second Fix or switched off. Each one has a switch.
 
-With the Whisper engine, dictionary words are also given to the model as spelling hints.
+**Starter words** are built in: about 350 names and terms the model often mishears.
+They come in five groups, each with its own switch on the Dictionary tab:
+
+- tech and AI
+- apps and brands
+- startup terms
+- Indian names and places
+- shorthand, such as "L G T M" → LGTM
+
+When a Starter word and one of your own words match the same thing, yours wins.
+
+With the Whisper engine, dictionary words and Starter words are also given to the
+model as spelling hints.
 
 ## Settings file (`config.json`)
 
@@ -175,6 +212,11 @@ Most settings are in the Settings window; these are the extra ones.
 | `ambient_end_silence` | `2.0` | Seconds of quiet that end a wake-word dictation |
 | `ambient_mode` | `true` | Keep listening locally for the wake phrase |
 | `commands_enabled` | `true` | Run Commands after the wake word; off means wake-word Dictation only |
+| `wake_sensitivity` | `normal` | `low`, `normal` or `high` |
+| `wake_mic` | `""` | Mic name for the wake word; empty means the laptop mic |
+| `starter_groups` | `{}` | Starter words groups switched off, e.g. `{"india": false}` |
+| `smart_numbers` | `true` | Write spoken numbers as digits |
+| `save_training_data` | `false` | Keep each dictation's audio and final text in `training/` for fine-tuning later |
 
 ## AI cleanup with Ollama (optional)
 

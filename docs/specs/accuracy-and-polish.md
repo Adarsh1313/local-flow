@@ -247,7 +247,7 @@ After daily use of LocalFlow, a handful of rough edges make it feel worse than W
 - [x] 1. Move `postprocess` and list formatting into a pure text module with `Options`; tests pin current behaviour
 - [x] 2. Numbers to digits (before lists, no "2. 0")
 - [x] 3. Spoken lists without punctuation, and "then" after a pause, via `Transcript` pauses
-- [ ] 4. Move `Dictionary` into a pure module with learn outcomes and the new rules; re-check `off` entries
+- [x] 4. Move `Dictionary` into a pure module with learn outcomes and the new rules; re-check `off` entries
 - [ ] 5. Fix feedback card, and "Not applied" on the Dictionary page
 - [ ] 6. Starter words module, five groups, group switches on the Dictionary page
 - [ ] 7. Real-transparency rendering for the pill, hover bar and Command card

@@ -64,8 +64,10 @@ import sounddevice as sd
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 import commands
+import dictionary
 import textfx
 import winactions
+from dictionary import Dictionary, extract_corrections, find_span
 from textfx import zipf
 
 SR = 16000
@@ -785,191 +787,7 @@ def paste(text):
     threading.Thread(target=restore, daemon=True).start()
 
 
-# ---------------------------------------------------------- self-learning dictionary
-
-COMMON = 3.0   # word frequency (zipf) from which a word counts as everyday
-STOPWORD = 5.5  # too frequent ("the", "in") to tell contexts apart
-
-
-def is_common(phrase):
-    return zipf(phrase) >= (COMMON if " " not in phrase.strip() else 2.5)
-
-
-class Dictionary:
-    """Words the speech model gets wrong for you, swapped in every transcript.
-
-    A rare mishearing ("Sio bhan" -> "Siobhan") is swapped everywhere. When the misheard
-    word is an everyday one ("New" -> "Nuvo"), swapping it everywhere would break
-    normal sentences, so it's only swapped next to the words it was learned with
-    ("Nuvo Health"), and "a new idea" stays untouched. Edits between two everyday
-    words ("Thursday" -> "Friday") are changes of mind, not mishearings, and aren't
-    learned at all. Modes: "always", "context", "off" (kept, not applied)."""
-
-    def __init__(self, path):
-        self.path = path
-        self.lock = threading.Lock()
-        self.entries = []
-        if path.exists():
-            try:
-                self.entries = json.loads(path.read_text(encoding="utf-8"))
-            except Exception as e:
-                log("dictionary.json unreadable:", e)
-        self._migrate()
-
-    def _migrate(self):
-        changed = False
-        for e in self.entries:
-            if "mode" not in e:
-                learned_common = e.get("source") == "learned" and is_common(e["heard"])
-                e["mode"] = "off" if learned_common else "always"
-                e.setdefault("context", [])
-                changed = True
-        if changed:
-            self.save()
-
-    def save(self):
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.entries, indent=2), encoding="utf-8")
-        os.replace(tmp, self.path)
-
-    def _find(self, heard):
-        return next((e for e in self.entries if e["heard"].lower() == heard.lower()), None)
-
-    def add(self, heard, wanted, source="manual"):
-        """Added by hand in the Dictionary tab: always applied."""
-        with self.lock:
-            e = self._find(heard)
-            if e:
-                e.update(wanted=wanted, mode="always", source="manual")
-                e["count"] = e.get("count", 1) + 1
-            else:
-                self.entries.append({"heard": heard, "wanted": wanted, "source": source, "mode": "always",
-                                     "context": [], "count": 1,
-                                     "added": datetime.now().isoformat(timespec="seconds")})
-            self.save()
-
-    def learn(self, heard, wanted, context, source):
-        """From a correction. Returns the entry, or None if it isn't worth learning."""
-        if is_common(heard) and is_common(wanted):
-            return None
-        context = [c for c in context if c and zipf(c) < STOPWORD]
-        with self.lock:
-            e = self._find(heard)
-            if e and e["wanted"].lower() == wanted.lower():
-                e["count"] = e.get("count", 1) + 1
-                e["context"] = sorted(set(e.get("context", [])) | {c.lower() for c in context})
-            else:
-                if e:
-                    self.entries.remove(e)
-                e = {"heard": heard, "wanted": wanted, "source": source, "count": 1,
-                     "context": sorted({c.lower() for c in context}),
-                     "added": datetime.now().isoformat(timespec="seconds")}
-                self.entries.append(e)
-            if e.get("mode") != "always":
-                e["mode"] = "always" if not is_common(heard) else ("context" if e["context"] else "off")
-            self.save()
-            return dict(e)
-
-    def set_mode(self, heard, mode):
-        with self.lock:
-            e = self._find(heard)
-            if e:
-                e["mode"] = mode
-                self.save()
-
-    def remove(self, heard):
-        with self.lock:
-            self.entries = [e for e in self.entries if e["heard"] != heard]
-            self.save()
-
-    def apply(self, text):
-        for e in sorted(self.entries, key=lambda e: -len(e["heard"])):
-            mode = e.get("mode", "always")
-            if mode == "off":
-                continue
-            pattern = r"(?<!\w)" + re.escape(e["heard"]) + r"(?!\w)"
-            if mode == "always":
-                text = re.sub(pattern, lambda m, w=e["wanted"]: w, text, flags=re.I)
-                continue
-            ctx = set(e.get("context", []))
-
-            def swap(m, w=e["wanted"], ctx=ctx):
-                left = re.search(r"([\w'-]+)\W*$", m.string[:m.start()])
-                right = re.match(r"\W*([\w'-]+)", m.string[m.end():])
-                near = {g.group(1).lower() for g in (left, right) if g}
-                return w if near & ctx else m.group(0)
-
-            text = re.sub(pattern, swap, text, flags=re.I)
-        return text
-
-    def words(self):
-        return sorted({e["wanted"] for e in self.entries if e.get("mode", "always") != "off"})
-
-
-def _clean(word):
-    return re.sub(r"^[^\w]+|[^\w]+$", "", word)
-
-
-def _norm(word):
-    return _clean(word).lower()
-
-
-def find_span(original, text):
-    """Locate the pasted words inside a whole text box, allowing for edits.
-    Returns those words as they are now, or None if they're no longer there."""
-    o, t = original.split(), text.split()
-    if not o or not t:
-        return None
-    on, tn = [_norm(w) for w in o], [_norm(w) for w in t]
-    sm = difflib.SequenceMatcher(None, on, tn, autojunk=False)
-    blocks = [b for b in sm.get_matching_blocks() if b.size]
-    if not blocks:
-        return None
-    anchor = max(blocks, key=lambda b: b.size)
-    reach = len(o) * 1.5 + 3
-    blocks = [b for b in blocks if abs(b.b - anchor.b) <= reach]
-    if sum(b.size for b in blocks) < 0.6 * len(o):
-        return None
-    first, last = blocks[0], blocks[-1]
-    j0 = max(0, first.b - first.a)
-    j1 = min(len(t), last.b + last.size + (len(o) - last.a - last.size))
-    return t[j0:j1]
-
-
-def extract_corrections(original, edited, strict=True):
-    """Word-level fixes between what was pasted and what it became, as
-    (heard, wanted, context) with the words next to the fix as context.
-    strict (automatic learning) ignores rewrites, and needs a rare word in the fix."""
-    o = original.split()
-    e = edited if isinstance(edited, list) else edited.split()
-    on, en = [_norm(w) for w in o], [_norm(w) for w in e]
-    ops = [op for op in difflib.SequenceMatcher(None, on, en, autojunk=False).get_opcodes()
-           if op[0] != "equal"]
-    changed = sum(max(i2 - i1, j2 - j1) for _, i1, i2, j1, j2 in ops)
-    if strict and changed > max(3, 0.3 * len(o)):
-        return []  # rewritten, not corrected
-    letters = lambda ws: re.sub(r"\W", "", "".join(ws)).lower()
-    pairs = []
-    for tag, i1, i2, j1, j2 in ops:
-        if tag != "replace" or i2 - i1 > 3 or j2 - j1 > 3:
-            continue
-        if strict and j2 == len(e) and j2 - j1 > 1:
-            # at the end of what we could see, the edit may have swallowed the next
-            # word you typed ("well found" -> "WellFound while"): keep the best match
-            j2 = max(range(j1 + 1, j2 + 1), key=lambda j: difflib.SequenceMatcher(
-                None, letters(o[i1:i2]), letters(e[j1:j]), autojunk=False).ratio())
-        heard = " ".join(_clean(w) for w in o[i1:i2]).strip()
-        wanted = " ".join(_clean(w) for w in e[j1:j2]).strip()
-        if not heard or not wanted or heard.lower() == wanted.lower():
-            continue
-        if strict and not any(zipf(w) < 4.5 for w in wanted.split()):
-            continue
-        if is_common(heard) and is_common(wanted):
-            continue  # an edit, not a mishearing
-        context = [_clean(e[j]) for j in (j1 - 1, j2) if 0 <= j < len(e)]
-        pairs.append((heard, wanted, context))
-    return pairs
-
+# ---------------------------------------------------------- watching for Fixes
 
 class CorrectionWatcher:
     """After a paste, reads the text box you pasted into (Windows UI Automation)
@@ -3068,8 +2886,7 @@ class Panel(Popup):
         Button(r, "Add", self._add_word, kind="primary").grid(row=1, column=3, padx=(px(SPACE[2]), 0))
         self.wanted_in.entry.bind("<Return>", lambda e: self._add_word())
 
-        active = [e for e in d.entries if e.get("mode", "always") != "off"]
-        off = [e for e in d.entries if e.get("mode") == "off"]
+        active, off = d.applied(), d.not_applied()
         newest = lambda es: sorted(es, key=lambda e: e.get("added", ""), reverse=True)
         b = group(p, f"Active · {len(active)}")
         if not active:
@@ -3485,7 +3302,8 @@ class Panel(Popup):
             msg = None
             if new and new != entry["text"]:
                 pairs = extract_corrections(entry["text"], new, strict=False)
-                pairs = [(h, w) for h, w, c in pairs if self.app.dictionary.learn(h, w, c, "manual")]
+                pairs = [(h, w) for h, w, c in pairs
+                         if isinstance(self.app.dictionary.learn(h, w, c, "manual"), dictionary.Learned)]
                 update_history_text(entry["ts"], entry["text"], new)
                 self.app.last_text = new
                 msg = (f"Learned: {', '.join(f'{h} → {w}' for h, w in pairs)}" if pairs
@@ -4274,18 +4092,15 @@ class App:
             save_training_text(sample, corrected)
         if not self.cfg["learn_corrections"]:
             return
-        learned = []
+        outcomes = []
         for heard, wanted, context in pairs:
-            e = self.dictionary.learn(heard, wanted, context, "learned")
-            if not e:
-                continue
-            log(f"Learned: {heard!r} -> {wanted!r} ({e['mode']}, context {e['context']})")
-            if e["mode"] == "always":
-                learned.append(f"{heard} → {wanted}")
-            elif e["mode"] == "context":
-                learned.append(f"{heard} → {wanted} (next to “{'/'.join(e['context'][:2])}”)")
-        if learned:
-            self.post("overlay", "message", ("Learned: " + ", ".join(learned))[:70], 3)
+            outcome = self.dictionary.learn(heard, wanted, context, "learned")
+            log(f"Fix: {heard!r} -> {wanted!r}: {outcome}")
+            outcomes.append(outcome)
+        if outcomes:
+            best = next((o for o in outcomes if isinstance(o, dictionary.Learned)), outcomes[0])
+            verb, obj = dictionary.describe(best)
+            self.post("overlay", "message", f"{verb}: {obj}"[:70], 3)
         self.post("call", lambda: self.panel.visible and self.panel.refresh())
 
     # -- paste last

@@ -5,7 +5,7 @@ Windows goes through the `actions` object in the Context. Terms: see GLOSSARY.md
 """
 import difflib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import quote, quote_plus
 
 
@@ -53,11 +53,22 @@ class NeedsConfirmation:
     apps: list         # [(Target, [window titles])]
 
 
+@dataclass(frozen=True)
+class Alias:
+    say: str             # the spoken name: "music"
+    target_id: str       # what it opens: Spotify
+    suggested: bool = False
+
+
 @dataclass
 class Context:
     catalog: list
     actions: object
     log: object = print   # where details of failures go (localflow.log in the app)
+    aliases: list = field(default_factory=list)
+    usage: dict = field(default_factory=dict)          # target id -> times used by voice
+    windows_usage: dict = field(default_factory=dict)  # target id -> minutes Windows saw it in use
+    on_use: object = lambda target_id: None            # records a use (the command log)
 
 
 OPEN_VERBS = ("open", "launch", "start", "switch to", "go to")
@@ -89,9 +100,35 @@ def score(heard, target):
     return max(difflib.SequenceMatcher(None, heard, f).ratio() for f in target_forms(target))
 
 
-def best_target(name, catalog):
-    best = max(catalog, key=lambda t: score(name, t), default=None)
-    return best if best and score(name, best) >= MATCH_THRESHOLD else None
+def preference(t, ctx):
+    """Between apps with the same name: used by voice most, then used most in Windows,
+    then the Store version (its launch ID names a package: "Claude_pzs8...!Claude")."""
+    if ctx is None:
+        return (0, 0, "!" in t.id)
+    return (ctx.usage.get(t.id, 0), ctx.windows_usage.get(t.id, 0), "!" in t.id)
+
+
+def alias_target(name, ctx):
+    if ctx is None:
+        return None
+    by_id = {t.id: t for t in ctx.catalog}
+    scored = [(difflib.SequenceMatcher(None, name, normalise(a.say)).ratio(), a) for a in ctx.aliases
+              if a.target_id in by_id]
+    best = max(scored, key=lambda x: x[0], default=None)
+    return by_id[best[1].target_id] if best and best[0] >= MATCH_THRESHOLD else None
+
+
+def best_target(name, catalog, ctx=None):
+    """The Target a heard name means: an Alias first, then the closest-sounding name;
+    ties (duplicate Start entries) go by preference."""
+    aliased = alias_target(name, ctx)
+    if aliased and (aliased in catalog or not catalog):
+        return aliased
+    scored = [(score(name, t), t) for t in catalog]
+    top = max((sc for sc, _ in scored), default=0)
+    if top < MATCH_THRESHOLD:
+        return None
+    return max((t for sc, t in scored if sc >= top - 1e-9), key=lambda t: preference(t, ctx))
 
 
 @dataclass(frozen=True)
@@ -166,7 +203,7 @@ def understand(heard, ctx):
         if words == phrase:
             return Intent("media", action=MEDIA_VERBS[phrase])
         if words.startswith(phrase + " "):
-            t = best_target(words[len(phrase) + 1:], ctx.catalog)
+            t = best_target(words[len(phrase) + 1:], ctx.catalog, ctx)
             return Intent("media", t, action=MEDIA_VERBS[phrase]) if t else None
     if words in CLOSE_ALL:
         return Intent("close_all")
@@ -175,13 +212,16 @@ def understand(heard, ctx):
     for verbs, kind in ((CLOSE_VERBS, "close"), (MINIMISE_VERBS, "minimise")):
         for verb in verbs:
             if words.startswith(verb + " "):
-                t = best_target(words[len(verb) + 1:], [t for t in ctx.catalog if t.kind == "app"])
+                t = best_target(words[len(verb) + 1:], [t for t in ctx.catalog if t.kind == "app"], ctx)
                 return Intent(kind, t) if t else NoMatch(Card("No app called", words[len(verb) + 1:], kind="no_match"))
     for verb in OPEN_VERBS:
         if words.startswith(verb + " "):
             name = words[len(verb) + 1:]
-            t = best_target(name, ctx.catalog)
+            t = best_target(name, ctx.catalog, ctx)
             return Intent("open", t) if t else NoMatch(Card("No app called", name, kind="no_match"))
+    aliased = alias_target(words, ctx)    # saying just an Alias opens it: "music"
+    if aliased:
+        return Intent("open", aliased)
     return None
 
 
@@ -207,8 +247,15 @@ def find_by_name(name, catalog):
     return next((t for t in catalog if t.name == name), None)
 
 
+def used(target, ctx):
+    if target is not None:
+        ctx.usage[target.id] = ctx.usage.get(target.id, 0) + 1
+        ctx.on_use(target.id)
+
+
 def carry_out(intent, ctx):
     a = ctx.actions
+    used(intent.target, ctx)
     if intent.kind == "media":
         player = a.media(intent.action, intent.target)
         if not player:
@@ -293,6 +340,37 @@ def confirm(asked, yes, ctx):
         except Exception as e:
             ctx.log(f"Couldn't close {t.name}: {e!r}")
     return Done(Card("Closed", n, glyph=GLYPH_CLOSED))
+
+
+SUGGESTED_ALIASES = [("codex", "ChatGPT"), ("antigravity", "Antigravity"), ("explorer", "File Explorer"),
+                     ("files", "File Explorer"), ("music", "Spotify")]
+FAVOURITES = ["Google Chrome", "Spotify", "Claude", "ChatGPT", "Antigravity", "File Explorer", "LocalFlow",
+              "Agent Kanban"]
+
+
+def suggested_aliases(catalog, dismissed):
+    """Aliases LocalFlow proposes, for apps that are installed and not dismissed."""
+    out = []
+    for say, name in SUGGESTED_ALIASES:
+        matches = [t for t in catalog if t.name == name]
+        if matches and say not in dismissed:
+            out.append(Alias(say, max(matches, key=lambda t: preference(t, None)).id, suggested=True))
+    return out
+
+
+def top_apps(catalog, usage, windows_usage, favourites=FAVOURITES):
+    """Apps to suggest first: used by voice, then used in Windows, then the favourites."""
+    apps = [t for t in catalog if t.kind == "app"]
+    ranked = sorted((t for t in apps if usage.get(t.id)), key=lambda t: -usage[t.id])
+    ranked += sorted((t for t in apps if windows_usage.get(t.id)), key=lambda t: -windows_usage[t.id])
+    for name in favourites:
+        ranked += [t for t in apps if t.name == name]
+    seen, out = set(), []
+    for t in ranked:
+        if t.name not in seen:
+            seen.add(t.name)
+            out.append(t)
+    return out
 
 
 def handle(heard, ctx):

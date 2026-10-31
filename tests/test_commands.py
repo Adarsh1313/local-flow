@@ -1,6 +1,6 @@
 """Behaviour of a Hands-free turn: heard text in, outcome and Windows actions out."""
-from commands import (Context, Dictation, Done, Failed, NeedsConfirmation, NoMatch, Target, answer, confirm,
-                      handle, is_complete_command)
+from commands import (Alias, Context, Dictation, Done, Failed, NeedsConfirmation, NoMatch, Target, answer, confirm,
+                      handle, is_complete_command, suggested_aliases, top_apps)
 
 
 class FakeActions:
@@ -232,6 +232,50 @@ def test_saying_yes_closes_them_and_no_or_silence_keeps_them():
     assert sorted(actions.calls) == [("close", "chrome"), ("close", "spotify"), ("close", "vscode")]
     kept = confirm(asked, False, ctx(busy_desk()))
     assert (kept.card.verb, kept.card.obj) == ("Kept open", "3 apps")
+
+
+CLAUDE_STORE = Target("Claude_pzs8sxrjxfjjc!Claude", "Claude")
+CLAUDE_OLD = Target("com.squirrel.AnthropicClaude.claude", "Claude")
+
+
+def test_an_alias_opens_its_target_with_or_without_open():
+    c = ctx()
+    c.aliases = [Alias("music", "spotify", suggested=True)]
+    assert handle("open music", c).card.obj == "Spotify"
+    assert handle("Music.", c).card.obj == "Spotify"
+
+
+def test_duplicate_apps_prefer_voice_use_then_windows_use_then_the_store_version():
+    assert handle("open claude", ctx(catalog=(CLAUDE_OLD, CLAUDE_STORE))).card.icon == CLAUDE_STORE.id  # Store by default
+    c = ctx(catalog=(CLAUDE_OLD, CLAUDE_STORE))
+    c.windows_usage = {CLAUDE_OLD.id: 30}
+    assert handle("open claude", c).card.icon == CLAUDE_OLD.id            # Windows saw that one used
+    c.usage = {CLAUDE_STORE.id: 3}
+    assert handle("open claude", c).card.icon == CLAUDE_STORE.id          # what you open by voice wins
+
+
+def test_each_command_is_counted_so_suggestions_learn():
+    c = ctx()
+    used = []
+    c.on_use = used.append
+    handle("open spotify", c)
+    handle("open spotify", c)
+    assert c.usage == {"spotify": 2} and used == ["spotify", "spotify"]
+
+
+def test_suggested_aliases_only_for_installed_apps_and_not_dismissed():
+    chatgpt = Target("OpenAI.Codex_2p2nqsd0c76g0!App", "ChatGPT")
+    antigravity, ide = Target("Google.Antigravity", "Antigravity"), Target("Google.AntigravityIDE", "Antigravity IDE")
+    catalog = [SPOTIFY, chatgpt, antigravity, ide]
+    got = {(a.say, a.target_id) for a in suggested_aliases(catalog, dismissed={"music"})}
+    assert got == {("codex", chatgpt.id), ("antigravity", antigravity.id)}
+    assert all(a.suggested for a in suggested_aliases(catalog, dismissed=set()))
+
+
+def test_top_apps_put_named_favourites_and_most_used_first():
+    catalog = [VSCODE, SPOTIFY, CHROME]
+    top = top_apps(catalog, usage={"vscode": 1}, windows_usage={"chrome": 178}, favourites=["Spotify"])
+    assert [t.id for t in top] == ["vscode", "chrome", "spotify"]
 
 
 def test_speech_without_a_command_word_is_dictation():

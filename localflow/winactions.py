@@ -124,6 +124,49 @@ def bring_forward(hwnd):
     user32.SetForegroundWindow(hwnd)
 
 
+NOT_TYPEABLE = {"ButtonControl", "HyperlinkControl", "ListControl", "ListItemControl", "MenuItemControl",
+                "MenuControl", "TabItemControl", "TreeItemControl", "TreeControl", "WindowControl", "ImageControl",
+                "TextControl", "CheckBoxControl", "RadioButtonControl", "SliderControl", "ToolBarControl"}
+
+
+def classify_focus(control_type, editable=None, caret=False):
+    """Can you type where the focus is? True, False, or None when it's unclear
+    (a pane or group): unclear stays Dictation, so no words are lost."""
+    if caret or control_type in ("EditControl", "ComboBoxControl"):
+        return True
+    if control_type == "DocumentControl":
+        return editable          # an editor (True), a web page or player (False)
+    if control_type in NOT_TYPEABLE:
+        return False             # a link, button, list, the desktop: nowhere to type
+    return None
+
+
+class _GUITHREADINFO(ctypes.Structure):
+    _fields_ = [("cb", wt.DWORD), ("flags", wt.DWORD), ("active", wt.HWND), ("focus", wt.HWND), ("capture", wt.HWND),
+                ("menu", wt.HWND), ("move", wt.HWND), ("caret", wt.HWND), ("rc", wt.RECT)]
+
+
+def focus_is_text_field():
+    """Is the keyboard focus somewhere you can type? See classify_focus."""
+    try:
+        info = _GUITHREADINFO(cb=ctypes.sizeof(_GUITHREADINFO))
+        caret = bool(user32.GetGUIThreadInfo(0, ctypes.byref(info)) and info.caret)
+        import uiautomation as auto
+        with auto.UIAutomationInitializerInThread():
+            ctrl = auto.GetFocusedControl()
+            if ctrl is None:
+                return classify_focus("", caret=caret)
+            editable = None
+            if ctrl.ControlTypeName == "DocumentControl":
+                try:
+                    editable = not ctrl.GetValuePattern().IsReadOnly
+                except Exception:
+                    editable = None
+            return classify_focus(ctrl.ControlTypeName, editable, caret)
+    except Exception:
+        return None
+
+
 # ------------------------------------------------------------------ icons
 # The same icon the Start menu or Explorer shows, asked from the Windows shell
 # (IShellItemImageFactory), so every installed app, folder and drive looks native.

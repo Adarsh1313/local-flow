@@ -3818,6 +3818,10 @@ class App:
 
     def _finish(self, session, handsfree_turn=False, answer_turn=False):
         try:
+            # Hold-to-talk with nowhere to type (desktop, Spotify, a web page) runs Commands.
+            # Checked at release, before the focus can move; unclear stays Dictation.
+            nowhere_to_type = (not handsfree_turn and not answer_turn and self.cfg["commands_enabled"]
+                               and winactions.focus_is_text_field() is False)
             t = time.time()
             text = session.finish()
             asr_time = time.time() - t
@@ -3827,7 +3831,7 @@ class App:
                 self.post("overlay", "idle")
                 self._answered(reply == "yes")
                 return
-            if handsfree_turn and self.cfg["commands_enabled"] and text and self._run_command(text):
+            if (handsfree_turn or nowhere_to_type) and self.cfg["commands_enabled"] and text                     and self._run_command(text):
                 return
             if self.cfg["llm_cleanup"] and text:
                 try:

@@ -281,5 +281,5 @@ After daily use of LocalFlow, a handful of rough edges make it feel worse than W
 - [ ] 7. Real-transparency rendering for the pill, hover bar and Command card
 - [x] 8. `WakeDetector` with openWakeWord "hey jarvis", fallback, sensitivity and wake-word mic picker
 - [x] 9. Training recordings: size display, "Delete all", clips module and test
-- [ ] 10. Hotword boosting spike with sherpa-onnx; record the result
+- [x] 10. Hotword boosting spike with sherpa-onnx; record the result (not adopted: see research note)
 - [ ] 11. README and user guide updates

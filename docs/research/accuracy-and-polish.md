@@ -113,3 +113,23 @@ Fix ideas:
   with a local TTS (Piper or Kokoro) and add them to the fine-tuning data.
   Synthetic text-to-audio adaptation is an established technique, and it all
   stays offline.
+
+## Hotword boosting spike: result (2026-11-01)
+
+**Not adopted for now.** Desk check of the sherpa-onnx project, before downloading the
+model:
+
+- Hotwords for NeMo/Parakeet TDT need `modified_beam_search`. That support was added in
+  Feb 2026: https://github.com/k2-fsa/sherpa-onnx/pull/3077
+- With Parakeet TDT, `modified_beam_search` hallucinates or returns empty text about 20%
+  of the time, even with an empty hotwords file; greedy search is fine:
+  https://github.com/k2-fsa/sherpa-onnx/issues/3267
+- A fix is open and points at the int8 encoder:
+  https://github.com/k2-fsa/sherpa-onnx/pull/4084
+
+A 1-in-5 empty or garbled dictation is far worse than the misspellings hotwords would
+fix. The Dictionary and Starter words cover these terms after recognition instead.
+
+Revisit when #4084 is merged: download `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8`, then
+compare greedy against hotword decoding on 20 recorded sentences full of Starter words,
+measuring word error rate and time.

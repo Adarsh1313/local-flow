@@ -117,17 +117,24 @@ def test_commands_settings_pages_build_offscreen(tmp_path):
     localflow.init_fonts(root)
 
     class FakeApp:
-        pass
+        def __getattr__(self, name):   # app actions the pages only bind to buttons
+            return lambda *a, **k: None
 
     app = FakeApp()
     app.root = root
     app.cfg = dict(localflow.DEFAULTS)
     spotify = commands.Target("spotify", "Spotify")
     app.commands = commands.Context([spotify], winactions.Actions(), aliases=[commands.Alias("music", "spotify")])
+    app.ambient = type("Ambient", (), {"last_heard": "", "running": False, "mic_name": None})()
+    app.engine = None
     app.dictionary = dictionary.Dictionary(tmp_path / "dictionary.json")
     app.dictionary.learn("patch", "batch", [])
     app.starter = starter.StarterWords(yours=app.dictionary)
     app.set_starter_group = lambda key, on: None
+    import clips
+    import numpy as np
+    app.clips = clips.Clips(tmp_path / "training")
+    app.clips.save(np.zeros(1600, np.float32), "hello")
     app.restart = app.quit = app.refresh_commands = lambda: None
     app.set_option = lambda key, value: app.cfg.__setitem__(key, value)
     app.panel_leave = 1.0
@@ -136,6 +143,10 @@ def test_commands_settings_pages_build_offscreen(tmp_path):
     panel = localflow.Panel(app)
     app.panel = panel
     try:
+        panel.show("settings", "General")
+        root.update_idletasks()
+        panel.hide()
+        app.panel_leave = 1.0
         panel.show("settings", "Commands")
         root.update_idletasks()
         assert app.panel_leave is None and panel.visible

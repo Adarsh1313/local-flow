@@ -63,6 +63,7 @@ import requests
 import sounddevice as sd
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
+import clips
 import commands
 import dictionary
 import starter
@@ -867,24 +868,6 @@ def update_history_text(ts, old, new):
     tmp = HISTORY_PATH.with_suffix(".tmp")
     tmp.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
     os.replace(tmp, HISTORY_PATH)
-
-
-# ------------------------------------------------- training data (opt-in)
-#
-# training/metadata.jsonl gets {"audio": "<file>.wav", "text": "..."}; if you later
-# fix the text, another line with the corrected text is added (the last one wins).
-
-def save_training_sample(audio, text):
-    TRAIN_DIR.mkdir(exist_ok=True)
-    name = datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".wav"
-    save_wav(TRAIN_DIR / name, audio)
-    save_training_text(name, text)
-    return name
-
-
-def save_training_text(name, text):
-    with open(TRAIN_DIR / "metadata.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps({"audio": name, "text": text}) + "\n")
 
 
 # ------------------------------------------------------------------- hold key
@@ -2851,8 +2834,20 @@ class Panel(Popup):
         self._switch(row(b, "Sounds", "Beep when recording starts and stops"), "sounds")
         self._switch(row(b, "Show the idle bar", "The small bar above the taskbar"), "show_idle_pill")
         self._switch(row(b, "Start with Windows"), "startup", getter=startup_enabled, setter=set_startup)
-        self._switch(row(b, "Save recordings for fine-tuning", "Keeps audio and final text in the training folder"),
-                     "save_training_data")
+        size = self.app.clips.size()
+        r = row(b, "Keep recordings for training",
+                f"Audio and final text, kept on this PC · {size / 1e6:.1f} MB" if size else
+                "Audio and final text, kept on this PC, for fine-tuning later")
+        self._switch(r, "save_training_data")
+        if size:
+            def delete():
+                if btn.text == "Delete all":
+                    btn.set_text("Click again to delete")
+                else:
+                    self.app.clips.delete_all()
+                    self.refresh()
+            btn = Button(r, "Delete all", delete, kind="subtle", font=F["caption"])
+            btn.pack(side="right", padx=(0, px(SPACE[2])))
         foot = tk.Frame(p, bg=T["bg"])
         foot.pack(fill="x", pady=(px(SPACE[3]), 0))
         Button(foot, "Open config.json", lambda: os.startfile(CONFIG_PATH), kind="subtle",
@@ -3390,6 +3385,7 @@ class App:
             self.cfg["startup_default_applied"] = True
             save_config(self.cfg)
         self.dictionary = Dictionary(DICT_PATH)
+        self.clips = clips.Clips(TRAIN_DIR)
         self.starter = starter.StarterWords(self.cfg["starter_groups"], yours=self.dictionary)
         self.mics = Mics()
         self.mic = None            # the open MicStream, kept ready between dictations
@@ -4094,7 +4090,7 @@ class App:
             add_history(text, session.duration)
             sample = None
             if self.cfg["save_training_data"]:
-                sample = save_training_sample(session.audio, text)
+                sample = self.clips.save(session.audio, text)
             self.watcher.watch(text, sample)
             self.post("overlay", "idle")
             self.post("call", lambda: self.panel.visible and self.panel.refresh())
@@ -4106,7 +4102,7 @@ class App:
 
     def _on_corrections(self, pairs, corrected, sample):
         if sample:
-            save_training_text(sample, corrected)
+            self.clips.update_text(sample, corrected)
         if not self.cfg["learn_corrections"]:
             return
         outcomes = []

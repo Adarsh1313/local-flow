@@ -6,11 +6,14 @@ Offline, free hold-to-talk dictation for Windows 11 on modest hardware
 ## Commands (run from localflow/)
 - Setup: `setup.bat` (creates .venv, installs requirements.txt)
 - Run: `run.bat` (background, tray icon) · `debug.bat` (with console)
-- Tests: `.venvScriptspython -m pytest ../tests` (Windows desktop tests: add `-m windows`)
+- Tests: `.venv\Scripts\python -m pytest ..\tests` (Windows desktop tests: add `-m windows`;
+  dev deps in requirements-dev.txt)
 - Design showcase preview: launch config `design` in .claude/launch.json (port 8765)
 
 ## Folder map
-- `localflow/localflow.py` — the whole app (single file, ~3.7k lines)
+- `localflow/localflow.py` — the app (UI, mic, engine; ~3.7k lines)
+- `localflow/commands.py` — voice Commands logic (pure, tested) · `winactions.py` — its Windows side
+- `tests/` — pytest; `test_winactions.py` drives the real desktop (opt-in)
 - `design/` — DESIGN.md, tokens.css, system.html ("Graphite Capsule")
 - `docs/specs/` — feature specs · `docs/research/` — research notes
 - `docs/user-guide.md`, `docs/screenshots/` — user docs

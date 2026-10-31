@@ -55,3 +55,27 @@ _Avoid_: Prompt, dialog, are-you-sure
 **No match**:
 The outcome when a Hands-free turn looks like a Command but no Target fits.
 _Avoid_: Error, failure
+
+### Dictionary
+
+**Dictionary**:
+Your list of words the speech model gets wrong, each with what you meant; applied to every Dictation.
+_Avoid_: Vocabulary, replacements, word list
+
+**Starter words**:
+A built-in, grouped list of names and terms the speech model often mishears (tech, apps and brands, startup terms, Indian names and places, shorthand). Kept apart from your own Dictionary entries.
+_Avoid_: Default dictionary, preset, word pack
+
+**Fix**:
+A word you correct by hand after a Dictation was pasted. The Dictionary learns from Fixes.
+_Avoid_: Edit, correction event
+
+**Rewording**:
+A Fix between two everyday words that looks like a change of mind, not a mishearing ("Thursday" to "Friday"). Not learned until you make the same Fix twice.
+_Avoid_: False fix
+
+### Text formatting
+
+**Spoken list**:
+Items you say in sequence ("one… two…", "first… then…") that become a numbered or bulleted list.
+_Avoid_: Smart list, auto-list

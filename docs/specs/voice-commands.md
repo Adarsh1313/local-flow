@@ -233,7 +233,7 @@ ones built from the apps the user opens most. Everything runs offline with no AI
       timings, hover-to-keep, success/No match sounds, No match and Couldn't open
 - [x] 3. Early end on ~0.7 s pause for complete Commands
 - [x] 4. Media (any player + named app) and volume Commands
-- [ ] 5. Places (known folders, This PC, drives, settings pages, websites) and search
+- [x] 5. Places (known folders, This PC, drives, settings pages, websites) and search
       (Spotify, YouTube, web)
 - [ ] 6. Close / minimise + Confirmation card (icon row, counts, window-title tips,
       voice yes/no, buttons, silence cancels)

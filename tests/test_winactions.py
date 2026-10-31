@@ -38,6 +38,19 @@ def test_real_icons_for_an_app_and_a_folder(notepad, tmp_path):
         assert im.getchannel("A").getextrema()[1] > 200  # something opaque was drawn
 
 
+def test_open_place_opens_a_folder_in_explorer(tmp_path):
+    import winactions
+    from commands import Target
+    folder = tmp_path / "LocalFlowPlaceTest"
+    folder.mkdir()
+    explorer = Target("Microsoft.Windows.Explorer", "File Explorer")
+    winactions.Actions().open_place(Target("folder:test", folder.name, "folder", str(folder)))
+    assert wait_for(lambda: any(w[3].startswith(folder.name) for w in winactions.windows_of(explorer)))
+    for hwnd, _, _, title in winactions.windows_of(explorer):
+        if title.startswith(folder.name):
+            winactions.user32.PostMessageW(hwnd, 0x0010, 0, 0)
+
+
 def test_volume_reads_and_sets_and_is_put_back():
     import winactions
     a = winactions.Actions()

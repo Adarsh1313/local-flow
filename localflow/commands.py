@@ -6,12 +6,15 @@ Windows goes through the `actions` object in the Context. Terms: see GLOSSARY.md
 import difflib
 import re
 from dataclasses import dataclass
+from urllib.parse import quote, quote_plus
 
 
 @dataclass(frozen=True)
 class Target:
     id: str
     name: str
+    kind: str = "app"   # "app", or a Place: "folder", "settings", "website"
+    path: str = ""      # where a Place opens: folder path, ms-settings: page or URL
 
 
 @dataclass(frozen=True)
@@ -68,8 +71,15 @@ def spoken_forms(name):
     return forms
 
 
+def target_forms(target):
+    forms = spoken_forms(target.name)
+    if target.kind == "folder":
+        forms.add(normalise(target.name) + " folder")   # "open downloads folder"
+    return forms
+
+
 def score(heard, target):
-    return max(difflib.SequenceMatcher(None, heard, f).ratio() for f in spoken_forms(target.name))
+    return max(difflib.SequenceMatcher(None, heard, f).ratio() for f in target_forms(target))
 
 
 def best_target(name, catalog):
@@ -84,6 +94,7 @@ class Intent:
     target: Target = None
     action: str = ""        # media: "pause", "play", "next", "previous"
     level: int = 0          # volume: 0-100
+    query: str = ""         # search: what to look for
 
 
 MEDIA_VERBS = {"pause": "pause", "stop": "pause", "play": "play", "resume": "play",
@@ -110,9 +121,22 @@ def spoken_number(words):
     return None
 
 
+SEARCH = re.compile(r"^(?:search (?P<where>.+?) for|search (?:the web )?for|google|look up) (?P<q>.+)$")
+MAX_SEARCH_WORDS = 14    # searches carry a query, so they may run longer
+GLYPH_SEARCH = ""
+PLACE_GLYPHS = {"folder": "", "settings": "", "website": ""}  # when the shell has no icon
+
+
 def understand(heard, ctx):
     """What the turn asks for: an Intent, a NoMatch, or None for Dictation. Never acts."""
     words = normalise(heard)
+    m = SEARCH.match(words)
+    if m and len(words.split()) <= MAX_SEARCH_WORDS:
+        query, where = heard_query(heard, m.group("q")), (m.group("where") or "web")
+        if where in ("spotify", "youtube", "web", "the web", "google"):
+            return Intent("search", find_by_name("Spotify", ctx.catalog) if where == "spotify" else None,
+                          action="web" if where in ("the web", "google") else where, query=query)
+        return NoMatch(Card("Can't search", where, kind="no_match"))
     if len(words.split()) > MAX_COMMAND_WORDS:
         return None
     if words in ("mute", "unmute", "volume up", "volume down", "louder", "quieter"):
@@ -139,6 +163,19 @@ def is_complete_command(heard, ctx):
     return isinstance(understand(heard, ctx), Intent)
 
 
+def heard_query(heard, normalised_query):
+    """The query as spoken (keeps "lo-fi"): the last words of what was heard."""
+    spoken = heard.strip().rstrip(".!?,").split()
+    n = len(normalised_query.split())
+    return " ".join(spoken[-n:]) if 0 < n <= len(spoken) else normalised_query
+
+
+SEARCH_URLS = {"spotify": lambda q: "spotify:search:" + quote(q),
+               "youtube": lambda q: "https://www.youtube.com/results?search_query=" + quote_plus(q),
+               "web": lambda q: "https://www.google.com/search?q=" + quote_plus(q)}
+SEARCH_NAMES = {"spotify": "Spotify", "youtube": "YouTube", "web": "the web"}
+
+
 def find_by_name(name, catalog):
     return next((t for t in catalog if t.name == name), None)
 
@@ -151,6 +188,11 @@ def carry_out(intent, ctx):
             return NoMatch(Card("Nothing", "playing", kind="no_match"))
         app = intent.target or find_by_name(player, ctx.catalog)
         return Done(Card(MEDIA_DONE[intent.action], player, app.id if app else ""))
+    if intent.kind == "search":
+        q = intent.query if intent.action == "spotify" else intent.query.lower()
+        a.open_url(SEARCH_URLS[intent.action](q))
+        return Done(Card("Searching " + SEARCH_NAMES[intent.action], intent.query,
+                         intent.target.id if intent.target else "", glyph=GLYPH_SEARCH))
     if intent.kind == "volume":
         a.set_volume(intent.level)
         return Done(Card("Volume", f"{intent.level}%", glyph=GLYPH_VOLUME))
@@ -162,6 +204,13 @@ def carry_out(intent, ctx):
         return Done(Card("Muted" if intent.kind == "mute" else "Sound", "Sound" if intent.kind == "mute" else "On",
                          glyph=GLYPH_MUTE if intent.kind == "mute" else GLYPH_VOLUME))
     t = intent.target
+    if t.kind != "app":
+        try:
+            a.open_place(t)
+        except Exception as e:
+            ctx.log(f"Couldn't open {t.name}: {e!r}")
+            return Failed(Card("Couldn't open", t.name, t.id, "failed"))
+        return Done(Card("Opening", t.name, t.id, glyph=PLACE_GLYPHS.get(t.kind, "")))
     if ctx.actions.switch_to(t):
         return Done(Card("Switching to", t.name, t.id))
     try:

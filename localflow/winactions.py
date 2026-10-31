@@ -18,15 +18,40 @@ SW_RESTORE, SW_SHOW = 9, 5
 VK_MENU, KEYUP = 0x12, 0x2
 
 
+SETTINGS_PAGES = {"Bluetooth": "bluetooth", "Display": "display", "Sound": "sound", "Wi-Fi": "network-wifi",
+                  "Network": "network", "Apps": "appsfeatures", "Windows Update": "windowsupdate",
+                  "Notifications": "notifications", "Personalization": "personalization",
+                  "Power": "powersleep", "Mouse": "mousetouchpad", "Privacy": "privacy",
+                  "Storage": "storagesense", "Default apps": "defaultapps"}
+WEBSITES = {"YouTube": "https://www.youtube.com", "Gmail": "https://mail.google.com", "Google": "https://www.google.com"}
+
+
+def builtin_places():
+    """Places every PC has: the main user folders, This PC, each drive, common
+    Settings pages and a few websites."""
+    places = [Target(f"folder:{n.lower()}", n, "folder", f"shell:{shell}") for n, shell in
+              (("Downloads", "Downloads"), ("Documents", "Personal"), ("Desktop", "Desktop"),
+               ("Pictures", "My Pictures"), ("Music", "My Music"), ("Videos", "My Video"))]
+    places.append(Target("folder:thispc", "This PC", "folder", "shell:MyComputerFolder"))
+    for letter in "CDEFGH":
+        if os.path.exists(f"{letter}:\\"):
+            places.append(Target(f"drive:{letter.lower()}", f"{letter} drive", "folder", f"{letter}:\\"))
+    places += [Target(f"settings:{page}", f"{name} settings", "settings", f"ms-settings:{page}")
+               for name, page in SETTINGS_PAGES.items()]
+    places += [Target(f"site:{name.lower()}", name, "website", url) for name, url in WEBSITES.items()]
+    return places
+
+
 def load_catalog():
-    """Every app in the Start menu (Store apps included), as Targets keyed by launch ID."""
+    """Every app in the Start menu (Store apps included), as Targets keyed by launch ID,
+    then the built-in Places."""
     out = subprocess.run(
         ["powershell", "-NoProfile", "-Command",
          "Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress"],
         capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW)
     rows = json.loads(out.stdout or "[]")
     rows = [rows] if isinstance(rows, dict) else rows
-    return [Target(r["AppID"], r["Name"]) for r in rows if r.get("Name") and r.get("AppID")]
+    return [Target(r["AppID"], r["Name"]) for r in rows if r.get("Name") and r.get("AppID")] + builtin_places()
 
 
 def _exe_of(hwnd):
@@ -135,10 +160,18 @@ _GetImage = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, _SIZE, ctypes.c_
 _Release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)
 
 
+SETTINGS_APP = "windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel"
+
+
 def shell_path(target_or_path):
-    """What the shell parses: an installed app's AppsFolder entry, or a file/folder path."""
+    """What the shell parses for an icon: an app's AppsFolder entry, a folder, or None."""
     if isinstance(target_or_path, Target):
-        return "shell:AppsFolder\\" + target_or_path.id
+        t = target_or_path
+        if t.kind == "app":
+            return "shell:AppsFolder\\" + t.id
+        if t.kind == "settings":
+            return "shell:AppsFolder\\" + SETTINGS_APP
+        return t.path if t.kind == "folder" else None
     return str(target_or_path)
 
 
@@ -146,9 +179,12 @@ def icon_image(target_or_path, size):
     """The shell's icon as a PIL RGBA image (straight alpha), or None."""
     from PIL import Image
     import numpy as np
+    path = shell_path(target_or_path)
+    if not path:
+        return None
     ole32.CoInitialize(None)
     obj = ctypes.c_void_p()
-    if shell32.SHCreateItemFromParsingName(shell_path(target_or_path), None, ctypes.byref(_IID_IMAGE_FACTORY),
+    if shell32.SHCreateItemFromParsingName(path, None, ctypes.byref(_IID_IMAGE_FACTORY),
                                           ctypes.byref(obj)) != 0 or not obj:
         return None
     vtbl = ctypes.cast(ctypes.cast(obj, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
@@ -254,3 +290,9 @@ class Actions:
 
     def launch(self, target):
         os.startfile("shell:AppsFolder\\" + target.id)
+
+    def open_place(self, target):
+        os.startfile(target.path)
+
+    def open_url(self, url):
+        os.startfile(url)   # default browser for web links, the Spotify app for spotify:

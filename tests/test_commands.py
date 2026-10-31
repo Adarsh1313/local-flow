@@ -33,13 +33,26 @@ class FakeActions:
     def mute(self, on):
         self.calls.append(("mute", on))
 
+    def open_place(self, target):
+        self.calls.append(("open_place", target.path))
+
+    def open_url(self, url):
+        self.calls.append(("open_url", url))
+
 
 SPOTIFY = Target("spotify", "Spotify")
 CHROME = Target("chrome", "Google Chrome")
 VSCODE = Target("vscode", "Visual Studio Code")
 
 
-def ctx(actions=None, catalog=(SPOTIFY, CHROME, VSCODE)):
+DOWNLOADS = Target("folder:downloads", "Downloads", "folder", r"C:\Users\me\Downloads")
+DDRIVE = Target("drive:d", "D drive", "folder", "D:\\")
+BLUETOOTH = Target("settings:bluetooth", "Bluetooth settings", "settings", "ms-settings:bluetooth")
+YOUTUBE = Target("site:youtube", "YouTube", "website", "https://www.youtube.com")
+PLACES = (DOWNLOADS, DDRIVE, BLUETOOTH, YOUTUBE)
+
+
+def ctx(actions=None, catalog=(SPOTIFY, CHROME, VSCODE) + PLACES):
     return Context(catalog=list(catalog), actions=actions or FakeActions())
 
 
@@ -126,6 +139,30 @@ def test_volume_can_be_set_stepped_and_muted():
     assert handle("volume up", ctx(actions)).card.obj == "45%"
     assert handle("mute", ctx(actions)).card.verb == "Muted"
     assert actions.calls == [("set_volume", 30), ("set_volume", 35), ("set_volume", 45), ("mute", True)]
+
+
+def test_folders_drives_settings_and_websites_open_as_places():
+    actions = FakeActions()
+    assert handle("Open Downloads folder.", ctx(actions)).card.obj == "Downloads"
+    assert handle("open d drive", ctx(actions)).card.obj == "D drive"
+    assert handle("open bluetooth settings", ctx(actions)).card.obj == "Bluetooth settings"
+    assert handle("open youtube", ctx(actions)).card.obj == "YouTube"
+    assert actions.calls == [("open_place", r"C:\Users\me\Downloads"), ("open_place", "D:\\"),
+                             ("open_place", "ms-settings:bluetooth"), ("open_place", "https://www.youtube.com")]
+
+
+def test_search_spotify_youtube_and_the_web():
+    actions = FakeActions()
+    out = handle("Search Spotify for lo-fi beats", ctx(actions))
+    assert (out.card.verb, out.card.obj, out.card.icon) == ("Searching Spotify", "lo-fi beats", "spotify")
+    handle("search youtube for cat videos", ctx(actions))
+    handle("Google how tall is Everest", ctx(actions))
+    handle("search the web for weather", ctx(actions))
+    assert actions.calls == [
+        ("open_url", "spotify:search:lo-fi%20beats"),
+        ("open_url", "https://www.youtube.com/results?search_query=cat+videos"),
+        ("open_url", "https://www.google.com/search?q=how+tall+is+everest"),
+        ("open_url", "https://www.google.com/search?q=weather")]
 
 
 def test_speech_without_a_command_word_is_dictation():

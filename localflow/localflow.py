@@ -64,7 +64,9 @@ import sounddevice as sd
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 import commands
+import textfx
 import winactions
+from textfx import join_pieces, zipf
 
 SR = 16000
 FRAME = 800  # 50 ms analysis frames
@@ -519,61 +521,6 @@ class Engine:
 
 # -------------------------------------------------------------------- session
 
-# ------------------------------------------------------------ joining phrases
-#
-# Long dictations are transcribed phrase by phrase (at pauses) so they finish fast.
-# The model treats every phrase as a whole sentence: it capitalises the first word
-# and ends it with a period. When you only paused to think, that leaves a false
-# sentence break, so the joins are repaired here.
-
-FILLERS = {"uh", "um", "uhm", "erm", "hmm", "mm", "ah", "eh"}
-CONTINUES = {"the", "a", "an", "to", "of", "for", "with", "and", "or", "but", "that", "my", "your",
-             "our", "their", "his", "her", "its", "in", "on", "at", "by", "from", "as", "be", "is",
-             "are", "was", "were", "if", "so", "because", "which", "who", "about", "into", "than",
-             "then", "this", "these", "those", "like", "very", "really", "just", "also", "can",
-             "could", "would", "should", "will", "going", "want", "have", "has", "had", "do", "does",
-             "not", "more", "most", "some", "any", "every", "each", "where", "when", "what", "how",
-             "basically", "actually", "even", "only", "i'm", "it's", "we", "you", "they", "he", "she"}
-
-
-def zipf(text):
-    from wordfreq import zipf_frequency
-    return zipf_frequency(text, "en")
-
-
-def join_pieces(pieces):
-    out = ""
-    for piece in (p.strip() for p in pieces):
-        if not piece:
-            continue
-        words = [w.strip(".,!?").lower() for w in piece.split()]
-        if out and all(w in FILLERS for w in words):
-            continue  # a lone "Uh" between phrases
-        if not out:
-            out = piece
-            continue
-        first = piece.split()[0]
-        bare = first.strip(".,!?;:\"'")
-        last = out.split()[-1].strip(".,!?;:\"'").lower()
-        # lower-case a capitalised everyday word ("The", "New"), never "I" or names
-        common = (bare[:1].isupper() and bare != "I" and not bare.isupper() and zipf(bare) >= 4.0)
-        if out.endswith(".") and (bare[:1].islower() or last in CONTINUES):
-            out = out[:-1]  # the "sentence" only ended because you paused
-            if common:
-                piece = bare.lower() + piece[len(bare):]
-        elif out[-1:] not in ".?!" and common:
-            piece = bare.lower() + piece[len(bare):]
-        out += " " + piece
-    return out
-
-
-def remove_fillers(text):
-    text = re.sub(r"(?i)(^|[\s,(])(?:uh+|um+|uhm|erm|hmm+)\b[,.]?(?=\s|$)", r"\1", text)
-    text = re.sub(r"\s{2,}", " ", text).replace(" ,", ",").strip(" ,")
-    # sentences that now start lower-case ("Uh what should I do" -> "What should I do")
-    return re.sub(r"(^|[.!?]\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
-
-
 class MicStream:
     """An open microphone. It stays open between dictations for a while, so the next
     one starts instantly (Bluetooth headsets otherwise need about a second to switch
@@ -780,117 +727,6 @@ class Session:
 
 
 # ---------------------------------------------------------------- text output
-
-# ------------------------------------------------------------- spoken lists
-#
-# "Here's my plan. One, buy milk. Two, call the bank." becomes
-#   Here's my plan:
-#   1. Buy milk
-#   2. Call the bank
-# A run of at least two consecutive markers is needed (1 then 2), and a bare
-# "one"/"first" only counts at the start of a sentence, so "I have one question
-# and two concerns" stays a sentence. "Bullet point" / "next point" make "-" bullets.
-#
-# Spoken sequences work too: "First, open the app. Then sign in. Finally, check
-# the logs." becomes a numbered list. These need a "first" to start and at least
-# three steps, so "Then I went home." on its own stays prose; explicit numbers
-# ("second", "two") win over "then" when both are said. "Point one is speed"
-# drops the label and the "is": "1. Speed".
-
-NUM_WORDS = {w: i for i, w in enumerate("one two three four five six seven eight nine ten".split(), 1)}
-ORDINALS = {w: i for i, w in enumerate(
-    "first second third fourth fifth sixth seventh eighth ninth tenth".split(), 1)}
-ORDINALS.update({"firstly": 1, "secondly": 2, "thirdly": 3, "first of all": 1, "first off": 1,
-                 "to start with": 1, "to begin with": 1, "second of all": 2})
-_ALT = lambda words: "|".join(sorted(words, key=len, reverse=True)).replace(" ", r"\s+")
-LIST_MARKER = re.compile(
-    r"(?P<pre>^|(?<=[.!?:;,])\s+|\s+(?=and\s+(?:then|finally|lastly)\b))(?:and\s+)?(?:"
-    r"(?P<digit>\d{1,2})[.):]\s+"
-    rf"|(?P<word>{_ALT(NUM_WORDS)})[,.:]\s+"
-    rf"|(?P<ord>{_ALT(ORDINALS)})\b[,.:]?\s+"
-    r"|(?P<seq>then|next(?!\s+(?:point|bullet))|after\s+that|after\s+this|afterwards)\b[,:]?\s+"
-    r"|(?P<last>finally|lastly|last\s+of\s+all)\b[,:]?\s+"
-    r")"
-    rf"|\b(?:number|point|step|item|option|reason|phase|stage|priority)\s+"
-    rf"(?P<pword>{_ALT(NUM_WORDS)}|\d{{1,2}})\b[,.:]?\s*"
-    r"|\b(?P<bullet>bullet point|bullet|next point|next bullet|new point|another point)\b[,.:]?\s*"
-    # "1. alpha 2. beta": the recogniser often leaves out the full stop before a digit
-    r"|(?<=\s)(?P<idigit>\d{1,2})[.)]\s+(?=[^\W\d_])",
-    re.I)
-# "Point one is speed" -> "Speed"
-_LABEL_VERB = re.compile(r"^(?:is|are|was|will\s+be|would\s+be)\s+(?:that\s+)?", re.I)
-
-
-def _longest_run(marks, follows):
-    """Longest chain starting at a 1 where each later mark `follows(mark, want)`."""
-    run = []
-    for i, mark in enumerate(marks):
-        if mark[2] == "num" and mark[3] == 1:
-            seq, want = [mark], 2
-            for nxt in marks[i + 1:]:
-                if follows(nxt, want):
-                    seq.append(nxt)
-                    want += 1
-                    if nxt[2] == "last":
-                        break
-            run = seq if len(seq) > len(run) else run
-    return run
-
-
-def format_lists(text):
-    marks = []
-    for m in LIST_MARKER.finditer(text):
-        g = m.groupdict()
-        if g["bullet"]:
-            kind, value = "bullet", None
-        elif g["seq"] or g["last"]:
-            kind, value = "seq" if g["seq"] else "last", None
-        else:
-            raw = re.sub(r"\s+", " ", g["digit"] or g["word"] or g["ord"] or g["pword"] or g["idigit"]).lower()
-            kind, value = "num", int(raw) if raw.isdigit() else NUM_WORDS.get(raw) or ORDINALS.get(raw)
-        marks.append((m.start() + len(g["pre"] or ""), m.end(), kind, value, bool(g["pword"])))
-
-    run = _longest_run(marks, lambda mk, want: mk[2] == "num" and mk[3] == want)
-    numbered = len(run) >= 2
-    if not numbered:
-        run = _longest_run(marks, lambda mk, want: mk[2] in ("seq", "last"))
-        numbered = len(run) >= 3
-    if not numbered:
-        run = [mk for mk in marks if mk[2] == "bullet"]
-        if len(run) < 2:
-            return text
-
-    items = []
-    for j, mark in enumerate(run):
-        item = text[mark[1]:run[j + 1][0] if j + 1 < len(run) else len(text)].strip()
-        item = re.sub(r"(?:[\s,;.]|\band)+$", "", item, flags=re.I).strip()
-        if mark[4]:
-            item = _LABEL_VERB.sub("", item)
-        if item:
-            items.append(item[0].upper() + item[1:])
-    if len(items) < 2:
-        return text
-    lead = text[:run[0][0]].strip()
-    if lead:
-        lead = lead.rstrip(".,;") + ("" if lead[-1] in ":?!" else ":")
-    lines = ([lead] if lead else []) + [f"{n}. {it}" if numbered else f"- {it}" for n, it in enumerate(items, 1)]
-    return "\n".join(lines)
-
-
-def postprocess(text, cfg, dictionary=None):
-    if cfg.get("remove_fillers", True):
-        text = remove_fillers(text)
-    if dictionary:
-        text = dictionary.apply(text)
-    for heard, wanted in cfg["replacements"].items():
-        text = re.sub(r"\b" + re.escape(heard) + r"\b", wanted, text, flags=re.I)
-    if cfg["voice_commands"]:
-        text = re.sub(r"[,.]?\s*\bnew paragraph\b[,.]?\s*", "\n\n", text, flags=re.I)
-        text = re.sub(r"[,.]?\s*\bnew line\b[,.]?\s*", "\n", text, flags=re.I)
-    if cfg.get("smart_lists", True):
-        text = format_lists(text)
-    return text.strip()
-
 
 def llm_cleanup(text, cfg):
     r = requests.post(
@@ -4405,7 +4241,7 @@ class App:
                     text = llm_cleanup(text, self.cfg)
                 except Exception as e:
                     log("Cleanup skipped:", repr(e))
-            text = postprocess(text, self.cfg, self.dictionary)
+            text = textfx.postprocess(text, textfx.Options.from_cfg(self.cfg), [self.dictionary])
             log(f"[{session.duration:.1f}s audio, {asr_time:.2f}s asr, "
                 f"{time.time() - t:.2f}s total] {text!r}")
             if not text:

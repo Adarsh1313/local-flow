@@ -1213,7 +1213,7 @@ class HoldKey:
 
 # ---------------------------------------------------------------- overlay UI
 #
-# Look and feel: design/tokens.css and design/design-brief.md ("Graphite Capsule").
+# Look and feel: design/tokens.css and design/DESIGN.md ("Graphite Capsule").
 # Every colour, font, spacing, radius and motion value below comes from those tokens.
 
 T = {

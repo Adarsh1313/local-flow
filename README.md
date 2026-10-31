@@ -147,8 +147,8 @@ flowchart LR
   `faster-whisper` (CTranslate2) as the GPU / multilingual option.
 - **Windows glue:** a global keyboard hook (`keyboard`), UI Automation (`uiautomation`)
   to read back corrected text, `ctypes` for focus, window styles and DPI.
-- **UI:** Tkinter drawn to a small set of design tokens ([design brief](localflow/design/design-brief.md),
-  [tokens](localflow/design/tokens.css)).
+- **UI:** Tkinter drawn to a small set of design tokens ([design brief](design/DESIGN.md),
+  [tokens](design/tokens.css)).
 
 ## What I learned from real use
 

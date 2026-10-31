@@ -57,7 +57,7 @@
   --radius-window: 8px;     /* popups and settings: Windows 11 draws this, we can't change it */
   --radius-capsule: 999px;  /* nav selection, hover bar, pill, switches, segmented control */
 
-  /* Elevation: only the floating pill and hover bar cast a shadow; cards use a lit edge instead */
+  /* Elevation: only floating things (pill, hover bar, command card) cast a shadow; cards use a lit edge instead */
   --shadow-float: 0 6px 18px rgba(0, 0, 0, .5);
 
   /* Motion, named by intent */
@@ -68,4 +68,25 @@
   --ease-out: cubic-bezier(.22, 1, .36, 1);        /* movement: fast start, soft landing */
   --ease-colour: cubic-bezier(.4, 0, .2, 1);       /* colour and opacity */
   --rise-distance: 8px;      /* how far windows rise as they appear */
+  --duration-exit: 150ms;    /* command card leaving: shorter than it arrived */
+  --duration-breathe: 1600ms;/* one full breath of the command "thinking" dot */
+  --duration-command-hold: 1600ms; /* command card stays after a success */
+  --duration-command-miss: 2400ms; /* command card stays after "No app called" */
+
+  /* Command mode ("Hey Jarvis") */
+  --color-command: var(--color-accent); /* command-mode waveform and thinking dot */
+  --size-command-icon: 32px; /* app icon or glyph tile in the command card */
+  --text-command: 15px;      /* the object line in the command card ("Spotify") */
+  --command-card-min: 200px; /* command card width range: fits its text */
+  --command-card-max: 300px;
+  --size-confirm-icon: 24px; /* app icons in the "Close 6 apps?" row */
+  --duration-confirm-wait: 6000ms; /* silence that cancels a confirmation */
+  --size-row-icon: 20px;     /* app/folder icons in Commands settings rows */
+  --command-card-height: 56px; /* the one-line-pair command card */
+  --size-button: 28px;       /* Close / Cancel in the confirmation card */
+  --size-count-badge: 14px;  /* window-count capsule on a confirmation icon */
+  --command-tip-max: 240px;  /* widest window-title tip */
+  --pill-height: 40px;       /* the active pill; the command card sits above it */
+  --pill-inset: 4px;         /* gap between the pill and the bottom of its window */
+  --opacity-float: .97;      /* the pill and the command card */
 }

@@ -1,3 +1,4 @@
 @echo off
-rem Stops LocalFlow (both the venv launcher and the Python it starts).
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe'\" | Where-Object { $_.CommandLine -match 'localflow\.py' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+rem Stops only Python processes running this checkout's localflow.py.
+cd /d "%~dp0"
+powershell -NoProfile -WindowStyle Hidden -Command "$script=(Resolve-Path 'localflow.py').Path; Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'pythonw.exe' -and $_.CommandLine -like ('*' + $script + '*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Remove-Item -LiteralPath 'localflow.pid' -Force -ErrorAction SilentlyContinue"

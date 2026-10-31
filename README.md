@@ -1,6 +1,6 @@
 # LocalFlow
 
-**Wispr Flow-style dictation that runs entirely on a 2019 budget laptop. Free, offline, Windows.**
+**The private, offline successor to “Hey Cortana” and Wispr Flow-style dictation—built for a 2019 budget laptop.**
 
 Hold a key, talk, let go: your words appear wherever the cursor is, punctuated and
 cleaned up. No account, no cloud, no word limits.
@@ -62,7 +62,9 @@ cloud sync.
 |---|---|
 | **Hold to talk** | Hold Right Ctrl, speak, release. Pasted into any app |
 | **Hands-free** | Double-tap Right Ctrl; tap again to finish |
-| **Wake word** (opt-in) | Say "Hey Jarvis", wait for the chime, talk; a pause ends it |
+| **Wake word** (on by default) | Say "Hey Jarvis", wait for the chime, talk; a pause ends it |
+| **Offline Commands** | “Hey Jarvis, open Spotify”, “pause”, “volume 30”, “open Downloads”, “close everything” |
+| **Names and Routines** | “music” can mean Spotify; “work mode” can open several apps together |
 | **Clean text** | Punctuation and casing from the model; "um"/"uh" removed; pauses don't break sentences |
 | **Spoken lists** | "One… two… three…" or "next point…" becomes a numbered or bulleted list |
 | **Self-learning dictionary** | Fix a misheard name once and it's spelled right from then on, without breaking everyday words |
@@ -130,7 +132,9 @@ flowchart LR
     end
     S[Session<br/>cuts audio at pauses] -->|phrases while you talk| P[Parakeet TDT 0.6B<br/>ONNX int8 · CPU]
     P --> J[Join phrases<br/>repair false breaks]
-    J --> T[Text clean-up<br/>fillers · dictionary · lists<br/>optional Ollama]
+    J --> Q{Command?}
+    Q -->|yes| A[Offline Windows actions<br/>apps · media · places · routines]
+    Q -->|no| T[Text clean-up<br/>fillers · dictionary · lists<br/>optional Ollama]
     T --> V[Paste<br/>clipboard + Ctrl+V into the app you were in]
     V --> C[Correction watcher<br/>UI Automation]
     C -->|names you fix| D[(Dictionary)]
@@ -147,8 +151,8 @@ flowchart LR
   `faster-whisper` (CTranslate2) as the GPU / multilingual option.
 - **Windows glue:** a global keyboard hook (`keyboard`), UI Automation (`uiautomation`)
   to read back corrected text, `ctypes` for focus, window styles and DPI.
-- **UI:** Tkinter drawn to a small set of design tokens ([design brief](localflow/design/design-brief.md),
-  [tokens](localflow/design/tokens.css)).
+- **UI:** Tkinter drawn to a small set of design tokens ([design brief](design/DESIGN.md),
+  [tokens](design/tokens.css)).
 
 ## What I learned from real use
 
@@ -178,7 +182,7 @@ data that would never be uploaded:
    learning from what I re-type most, and showing which corrections paid off.
 3. **History-based personalisation.** Use past dictations to bias spelling and
    formatting towards how I actually write.
-4. **Command mode:** select text, say "make this shorter", with a local LLM.
+4. **AI rewrite Commands:** select text, say "make this shorter", with a local LLM.
 5. **Per-app style:** casual in chat, formal in email, code-aware in the IDE.
 6. **Snippets** ("my calendar link") and **backtracking** ("at 5, actually 6" → "at 6").
 7. **Split the single file** into modules with a test suite.
@@ -187,7 +191,7 @@ data that would never be uploaded:
 
 See the full **[comparison with Wispr Flow](docs/wispr-comparison.md)**. In short:
 English-first (Parakeet is English-only; Whisper covers other languages more slowly),
-Windows-only, no command mode or per-app styles yet, and accuracy is a little behind a
+Windows-only, no AI rewrite Commands or per-app styles yet, and accuracy is a little behind a
 large cloud model on difficult audio.
 
 ## Run it

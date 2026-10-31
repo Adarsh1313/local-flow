@@ -35,6 +35,8 @@ DICT_PATH = APP_DIR / "dictionary.json"
 TRAIN_DIR = APP_DIR / "training"
 LAST_AUDIO_PATH = APP_DIR / "last_recording.wav"
 LOG_PATH = APP_DIR / "localflow.log"
+COMMAND_LOG_PATH = APP_DIR / "commands.jsonl"
+PID_PATH = APP_DIR / "localflow.pid"
 ICON_PATH = APP_DIR / "localflow.ico"
 
 # pythonw has no console, so send prints and errors to a log file.
@@ -51,6 +53,7 @@ for _sp in site.getsitepackages():
 
 import tkinter as tk
 import tkinter.font as tkfont
+from tkinter import filedialog
 
 import keyboard
 import numpy as np
@@ -59,6 +62,9 @@ import pystray
 import requests
 import sounddevice as sd
 from PIL import Image, ImageDraw, ImageFont, ImageTk
+
+import commands
+import winactions
 
 SR = 16000
 FRAME = 800  # 50 ms analysis frames
@@ -82,9 +88,15 @@ DEFAULTS = {
     "paste_last_keys": "ctrl+alt+v",   # opens recent transcripts
     "mic": "auto",                 # "auto" = best available, or a microphone name
     "keep_mic_ready_seconds": 60,  # keep the mic open after dictating: no cut-off first words
-    "ambient_mode": False,         # listen on the laptop mic for the wake phrase
+    "ambient_mode": True,          # listen on the laptop mic for the wake phrase
     "wake_phrase": "Hey Jarvis",
     "ambient_end_silence": 2.0,    # seconds of quiet that end a wake-word dictation
+    "commands_enabled": True,      # "Hey Jarvis, open Spotify" runs instead of pasting
+    "aliases": [],                 # spoken names for Command Targets
+    "routines": [],                # named multi-step Commands
+    "user_apps": [],               # path-based apps missing from the Start menu
+    "user_places": [],             # folders and websites added in Commands settings
+    "suggestions_dismissed": [],   # Suggested names/routines the user removed
     "learn_corrections": True,     # learn from words you fix right after dictating
     "save_training_data": False,   # keep audio + final text for fine-tuning later
 }
@@ -109,6 +121,9 @@ def load_config():
             cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
         except Exception as e:
             log("config.json unreadable, using defaults:", e)
+    for key in ("aliases", "routines", "user_apps", "user_places", "suggestions_dismissed"):
+        if not isinstance(cfg.get(key), list):
+            cfg[key] = []
     save_config(cfg)
     return cfg
 
@@ -735,13 +750,28 @@ class Session:
             self.stopping.set()
         self.mic.detach()
 
+    def peek(self):
+        """Transcribe what's been said so far without stopping (the early Command check).
+        Only for short turns: nothing has been committed yet."""
+        a = self._audio()
+        if self.committed or not len(a) or len(a) >= self.MIN_CHUNK * SR:
+            return ""  # long turns are dictation anyway, and the worker may be transcribing
+        seg = trim_silence(a, speech_threshold(frame_rms(a)))
+        text = self.engine.transcribe(normalize(seg)) if seg is not None else ""
+        self.peeked = (len(a), text)
+        return text
+
     def finish(self):
         self._close()
         self.worker.join()
         a = self._audio()
         self.duration = len(a) / SR
         self.audio = a
-        self._commit(a[self.committed:], speech_threshold(frame_rms(a)))
+        n, text = getattr(self, "peeked", (-1, ""))
+        if not self.committed and 0 <= len(a) - n < 0.3 * SR and text:
+            self.parts = [text]  # nothing new since the early check: reuse it
+        else:
+            self._commit(a[self.committed:], speech_threshold(frame_rms(a)))
         save_wav(LAST_AUDIO_PATH, a)
         return join_pieces(self.parts)
 
@@ -1257,7 +1287,7 @@ class HoldKey:
 
 # ---------------------------------------------------------------- overlay UI
 #
-# Look and feel: design/tokens.css and design/design-brief.md ("Graphite Capsule").
+# Look and feel: design/tokens.css and design/DESIGN.md ("Graphite Capsule").
 # Every colour, font, spacing, radius and motion value below comes from those tokens.
 
 T = {
@@ -1273,14 +1303,20 @@ T = {
 KEY = "#010203"  # transparent colour key for the pill and the hover bar
 SPACE = {1: 4, 2: 8, 3: 12, 4: 16, 5: 20, 6: 24}
 RADIUS = {"chip": 6, "control": 8, "card": 12}
-MOTION = {"hover": 120, "move": 200, "enter": 220, "confirm": 1400, "rise": 8}
+MOTION = {"hover": 120, "move": 200, "enter": 220, "confirm": 1400, "rise": 8,
+          "exit": 150, "command_hold": 1600, "command_miss": 2400, "confirm_wait": 6000}
+# Command mode sizes (--size-command-icon, --command-card-*, --size-confirm-icon, ...)
+COMMAND = {"icon": 32, "confirm_icon": 24, "row_icon": 20, "card_min": 200, "card_max": 300, "card_h": 56,
+           "button_h": 28, "tip_max": 240, "pill_h": 40, "pill_inset": 4, "badge": 14}
+FLOAT_ALPHA = 0.97   # --opacity-float: the pill and the command card
+TONES = {"wake": ((660, 70), (990, 110)), "success": (1320, 30), "miss": (330, 140)}  # (Hz, ms)
 F = {}           # fonts, filled by init_fonts()
 S = 1.0          # display scale (125% -> 1.25)
 
 GLYPH = {"notes": "", "settings": "", "mic": "", "paste": "",
          "dictionary": "", "history": "", "check": "", "close": "",
          "pin": "", "pinned": "", "delete": "", "prev": "", "next": "",
-         "chev": "", "edit": ""}
+         "chev": "", "edit": "", "commands": "", "folder": "", "web": ""}
 
 user32 = ctypes.windll.user32
 
@@ -1300,6 +1336,7 @@ def init_fonts(root):
         "heading": (strong, 10),          # group headings, in muted
         "subtitle": (strong, 11),         # popup titles
         "title": (display, 16),           # page titles
+        "command": (display, 11),         # --text-command: the object line of the command card
         "stat": (display, 16),            # stats corner numbers
         "icon": (pick("Segoe Fluent Icons", "Segoe MDL2 Assets"), 11),
         "icon_small": (pick("Segoe Fluent Icons", "Segoe MDL2 Assets"), 9),
@@ -1622,6 +1659,7 @@ class Button(tk.Canvas):
         "primary": ("select", "select_hover", "dim", "select_contrast", ""),
         "subtle": (None, "surface_hover", "control_active", "text", ""),
         "selected": ("control_hover", "control_hover", "control_active", "text", "border"),
+        "danger": (None, "surface_hover", "control_active", "danger", ""),
     }
 
     def __init__(self, parent, text, command, kind="standard", font=None, icon=False, pad_x=12, confirm=None):
@@ -1975,11 +2013,12 @@ class Overlay:
         self.key_text = key_text
         self.hover = False  # the hover bar is showing in the pill's place
         self.listening = False  # wake word mode is on
+        self.command_mode = False  # a hands-free turn that may be a Command: ice-blue wave
         self.finish_hint = None
         self.scale = S
         self.win = tk.Toplevel(root)
         self.win.overrideredirect(True)
-        self.win.attributes("-topmost", True, "-transparentcolor", KEY, "-alpha", 0.97)
+        self.win.attributes("-topmost", True, "-transparentcolor", KEY, "-alpha", FLOAT_ALPHA)
         w, h = px(self.W), px(self.H)
         self.canvas = tk.Canvas(self.win, width=w, height=h, bg=KEY, highlightthickness=0)
         self.canvas.pack()
@@ -2013,11 +2052,11 @@ class Overlay:
         pill(self.canvas, x0, y0, x0 + w, y0 + h, fill or T["surface"], T["popup_border"], T["edge_glow"])
         return x0, y0, x0 + w, y0 + h
 
-    def _wave(self, x, cy):
+    def _wave(self, x, cy, color=None):
         for i, lv in enumerate(self.levels):
             bh = max(px(2), min(1.0, (lv / 0.06) ** 0.6) * px(22))
             self.canvas.create_rectangle(x + i * px(5), cy - bh / 2, x + i * px(5) + px(2.5),
-                                         cy + bh / 2, fill=T["text"], outline="")
+                                         cy + bh / 2, fill=color or T["text"], outline="")
 
     def _rec_dot(self, x, cy):
         dot(self.canvas, x, cy, px(4 + 1.5 * np.sin(self.tick / 4)), T["recording"])
@@ -2049,8 +2088,11 @@ class Overlay:
             tw = tkfont.Font(font=F["caption"]).measure(hint)
             x0, y0, x1, y1 = self._pill(px(200) + tw + px(14), px(40))
             cy = (y0 + y1) / 2
-            self._rec_dot(x0 + px(18), cy)
-            self._wave(x0 + px(34), cy)
+            if self.command_mode:  # --color-command, no red dot: this isn't (yet) dictation
+                self._wave(x0 + px(SPACE[5]), cy, T["accent"])
+            else:
+                self._rec_dot(x0 + px(18), cy)
+                self._wave(x0 + px(34), cy)
             c.create_text(x0 + px(186), cy, text=hint, fill=T["muted"], font=F["caption"], anchor="w")
             return
 
@@ -2253,6 +2295,267 @@ class HoverBar:
     def _park(self):
         if not self.visible:
             self.win.geometry("+-20000+-20000")
+
+
+def above_pill_y(overlay, h):
+    """Top of a window of height h that sits just above the overlay's pill."""
+    return overlay.y + overlay.h - px(COMMAND["pill_inset"]) - px(COMMAND["pill_h"]) - px(SPACE[2]) - h
+
+
+def on_surface(im):
+    """An RGBA icon flattened onto the card surface (no fringe against the colour key)."""
+    bg = Image.new("RGBA", im.size, rgb(T["surface"]) + (255,))
+    return ImageTk.PhotoImage(Image.alpha_composite(bg, im))
+
+
+def fit_text(text, font, width):
+    """text, shortened with an ellipsis until it fits width."""
+    while font.measure(text) > width and len(text) > 2:
+        text = text[:-2] + "…"
+    return text
+
+
+class CommandCard:
+    """What a Command did: the app's real icon, a muted verb and the object ("Opening" /
+    "Spotify"). Rises out of the pill (the pill sits on the taskbar, so the card goes
+    above it), holds, and stays while you point at it. Never takes focus."""
+
+    ICON, PAD, GAP = COMMAND["icon"], SPACE[3], SPACE[3]
+    MIN_W, MAX_W, H = COMMAND["card_min"], COMMAND["card_max"], COMMAND["card_h"]
+    HOLD = {"done": MOTION["command_hold"], "no_match": MOTION["command_miss"], "failed": MOTION["command_miss"]}
+    POLL = 100   # ms between checks while a card is up; none once it's hidden
+
+    def __init__(self, app):
+        self.app = app
+        self.win = tk.Toplevel(app.root)
+        self.win.overrideredirect(True)
+        self.win.attributes("-topmost", True, "-transparentcolor", KEY, "-alpha", 0.0)
+        self.canvas = tk.Canvas(self.win, bg=KEY, highlightthickness=0)
+        self.canvas.pack()
+        self.win.geometry("1x1+-20000+-20000")
+        self.win.update_idletasks()
+        set_ex_style(self.win, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+        self.hovered = False
+        self.canvas.bind("<Enter>", lambda e: setattr(self, "hovered", True))
+        self.canvas.bind("<Leave>", lambda e: self._leave())
+        self.until, self.job = 0, None
+        self.show_t = Tween(self.canvas, self._place)  # 0 hidden (lower, clear) .. 1 shown
+        self.icons = {}
+
+    def _icon(self, card):
+        """The app's icon on the card surface, or a glyph on a control tile."""
+        size = px(self.ICON)
+        if card.icon:
+            if card.icon not in self.icons:
+                im = None
+                try:
+                    im = winactions.icon_image(next(t for t in self.app.commands.catalog if t.id == card.icon), size)
+                except Exception as e:
+                    log("Icon failed:", repr(e))
+                self.icons[card.icon] = on_surface(im) if im is not None else None
+            if self.icons[card.icon]:
+                return self.icons[card.icon], None
+        ch = card.glyph or {"no_match": "", "failed": ""}.get(card.kind, "")
+        return shape(size, size, px(RADIUS["control"]), T["control"]), ch
+
+    def show(self, card):
+        c = self.canvas
+        self.asking = None
+        c.unbind("<Motion>")
+        c.unbind("<Button-1>")
+        if hasattr(self, "tipwin"):
+            self._tip(None)
+        verb_f, obj_f = tkfont.Font(font=F["caption"]), tkfont.Font(font=F["command"])
+        text_x = px(self.PAD + self.ICON + self.GAP)
+        w = text_x + max(verb_f.measure(card.verb), obj_f.measure(card.obj)) + px(SPACE[4])
+        self.w, self.h = max(px(self.MIN_W), min(px(self.MAX_W), w)), px(self.H)
+        c.config(width=self.w, height=self.h)
+        clear(c)
+        put(c, 0, 0, shape(self.w, self.h, px(RADIUS["card"]), T["surface"], T["popup_border"], 1, T["edge_glow"]))
+        img, ch = self._icon(card)
+        cy, ix = self.h / 2, px(self.PAD) + px(self.ICON) / 2
+        put(c, ix, cy, img, anchor="center")
+        if ch:
+            icon(c, ix, cy, ch, T["dim"], 12)
+        maxw = self.w - text_x - px(self.PAD)
+        c.create_text(text_x, cy - px(SPACE[2]), text=card.verb, fill=T["muted"], font=F["caption"], anchor="w")
+        c.create_text(text_x, cy + px(SPACE[2]), text=fit_text(card.obj, obj_f, maxw), fill=T["text"],
+                      font=F["command"], anchor="w")
+        ov = self.app.overlay
+        self.x = ov.x + ov.w // 2 - self.w // 2
+        self.y = above_pill_y(ov, self.h)
+        self.hovered = False
+        self.show_t.to(1, MOTION["enter"])
+        self.until = time.time() + self.HOLD.get(card.kind, MOTION["command_hold"]) / 1000
+        self._schedule()
+
+    # -- Confirmation: "Close 6 apps?", their icons, Cancel and a white Close button
+    CONFIRM_ICON, MAX_ICONS, BTN_H = COMMAND["confirm_icon"], 6, COMMAND["button_h"]
+
+    def ask(self, asked, on_answer):
+        c = self.canvas
+        self.asking, self.on_answer, self.hot = asked, on_answer, None
+        pad, icon_px, gap = px(SPACE[4]), px(self.CONFIRM_ICON), px(SPACE[2])
+        shown = asked.apps[:self.MAX_ICONS]
+        extra = len(asked.apps) - len(shown)
+        row_w = len(shown) * icon_px + (len(shown) - 1 + (1 if extra else 0)) * gap + (icon_px if extra else 0)
+        title_f = tkfont.Font(font=F["command"])
+        self.w = max(px(self.MIN_W), min(px(self.MAX_W) + px(40), 2 * pad + max(row_w, title_f.measure(asked.question))))
+        self.title_h = title_f.metrics("linespace")
+        self.h = pad + self.title_h + px(SPACE[3]) + icon_px + px(SPACE[3]) + px(self.BTN_H) + pad
+        c.config(width=self.w, height=self.h)
+        self.regions = []   # (x0, y0, x1, y1, what)
+        self._draw_ask()
+        ov = self.app.overlay
+        self.x = ov.x + ov.w // 2 - self.w // 2
+        self.y = above_pill_y(ov, self.h)
+        self.hovered = False
+        self.until = float("inf")   # waits for an answer
+        self.show_t.to(1, MOTION["enter"])
+        c.bind("<Motion>", self._ask_motion)
+        c.bind("<Button-1>", self._ask_click)
+        self._schedule()
+
+    def _draw_ask(self):
+        c, asked = self.canvas, self.asking
+        clear(c)
+        pad, icon_px, gap = px(SPACE[4]), px(self.CONFIRM_ICON), px(SPACE[2])
+        put(c, 0, 0, shape(self.w, self.h, px(RADIUS["card"]), T["surface"], T["popup_border"], 1, T["edge_glow"]))
+        c.create_text(pad, pad + self.title_h / 2, text=asked.question, fill=T["text"], font=F["command"], anchor="w")
+        y = pad + self.title_h + px(SPACE[3])
+        self.regions = []
+        x = pad
+        for t, titles in asked.apps[:self.MAX_ICONS]:
+            img = self._small_icon(t, icon_px)
+            put(c, x, y, img or shape(icon_px, icon_px, px(RADIUS["chip"]), T["control"]))
+            if len(titles) > 1:   # count badge: white capsule, bottom-right
+                bh = px(COMMAND["badge"])
+                bw = max(bh, tkfont.Font(font=F["small"]).measure(str(len(titles))) + px(SPACE[2]))
+                bx, by = x + icon_px - bw + px(SPACE[1]), y + icon_px - bh + px(SPACE[1])   # overhangs the corner
+                pill(c, bx, by, bx + bw, by + bh, T["select"])
+                c.create_text(bx + bw / 2, by + bh / 2, text=str(len(titles)), fill=T["select_contrast"], font=F["small"])
+            self.regions.append((x, y, x + icon_px, y + icon_px, ("app", t, titles)))
+            x += icon_px + gap
+        extra = len(asked.apps) - self.MAX_ICONS
+        if extra > 0:
+            put(c, x, y, shape(icon_px, icon_px, px(RADIUS["chip"]), T["control"]))
+            c.create_text(x + icon_px / 2, y + icon_px / 2, text=f"+{extra}", fill=T["dim"], font=F["caption"])
+            self.regions.append((x, y, x + icon_px, y + icon_px, ("more", None, [t.name for t, _ in asked.apps[self.MAX_ICONS:]])))
+        # buttons, right-aligned: Cancel (plain), Close (white)
+        by1 = self.h - pad
+        by0 = by1 - px(self.BTN_H)
+        x1 = self.w - pad
+        for label, what, primary in (("Close", "yes", True), ("Cancel", "no", False)):
+            bw = tkfont.Font(font=F["body_strong" if primary else "body"]).measure(label) + px(24)
+            x0 = x1 - bw
+            hot = self.hot == what
+            fill = (T["select_hover"] if hot else T["select"]) if primary else (T["surface_hover"] if hot else "")
+            if fill:
+                put(c, x0, by0, shape(bw, px(self.BTN_H), px(RADIUS["control"]), fill))
+            c.create_text((x0 + x1) / 2, (by0 + by1) / 2, text=label, font=F["body_strong" if primary else "body"],
+                          fill=T["select_contrast"] if primary else T["text"])
+            self.regions.append((x0, by0, x1, by1, ("button", what, None)))
+            x1 = x0 - px(SPACE[2])
+
+    def _small_icon(self, target, size):
+        key = (target.id, size)
+        if key not in self.icons:
+            im = None
+            try:
+                im = winactions.icon_image(target, size)
+            except Exception as e:
+                log("Icon failed:", repr(e))
+            if im is not None:
+                im = on_surface(im)
+            self.icons[key] = im
+        return self.icons[key]
+
+    def _region_at(self, x, y):
+        return next((r[4] for r in self.regions if r[0] <= x <= r[2] and r[1] <= y <= r[3]), None)
+
+    def _ask_motion(self, e):
+        if not getattr(self, "asking", None):
+            return
+        hit = self._region_at(e.x, e.y)
+        hot = hit[1] if hit and hit[0] == "button" else None
+        self.canvas.config(cursor="hand2" if hot else "")
+        if hot != self.hot:
+            self.hot = hot
+            self._draw_ask()
+        if hit and hit[0] in ("app", "more"):
+            r = next(r for r in self.regions if r[4] is hit)
+            self._tip(hit, self.x + (r[0] + r[2]) // 2, self.y)   # above the card, not over its question
+        else:
+            self._tip(None)
+
+    def _ask_click(self, e):
+        hit = self._region_at(e.x, e.y)
+        if getattr(self, "asking", None) and hit and hit[0] == "button":
+            self.asking = None
+            self._tip(None)
+            self.canvas.unbind("<Motion>")
+            self.canvas.unbind("<Button-1>")
+            self.on_answer(hit[1] == "yes")
+
+    def _tip(self, hit, cx=0, top=0):
+        """Which windows an app has open (tab, folder or file name), above its icon."""
+        if not hasattr(self, "tipwin"):
+            self.tipwin = tk.Toplevel(self.app.root)
+            self.tipwin.overrideredirect(True)
+            self.tipwin.attributes("-topmost", True, "-transparentcolor", KEY)
+            self.tipcanvas = tk.Canvas(self.tipwin, bg=KEY, highlightthickness=0)
+            self.tipcanvas.pack()
+            self.tipwin.geometry("1x1+-20000+-20000")
+            self.tipwin.update_idletasks()
+            set_ex_style(self.tipwin, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT)
+        if not hit:
+            self.tipwin.geometry("+-20000+-20000")
+            return
+        kind, t, titles = hit
+        head = t.name if kind == "app" else "Also closing"
+        lines = titles[:4] + ([f"+{len(titles) - 4} more"] if len(titles) > 4 else [])
+        f, hf = tkfont.Font(font=F["caption"]), tkfont.Font(font=F["caption"])
+        lines = [fit_text(l, f, px(COMMAND["tip_max"]) - px(SPACE[3]) * 2) for l in lines]
+        w = min(px(COMMAND["tip_max"]), max(f.measure(l) for l in [head] + lines) + px(SPACE[3]) * 2)
+        lh = px(16)
+        h = px(SPACE[2]) * 2 + lh * (1 + len(lines))
+        c = self.tipcanvas
+        c.config(width=w, height=h)
+        clear(c)
+        put(c, 0, 0, shape(w, h, px(RADIUS["control"]), T["surface"], T["popup_border"]))
+        c.create_text(px(SPACE[3]), px(SPACE[2]) + lh / 2, text=head, fill=T["muted"], font=F["caption"], anchor="w")
+        for i, line in enumerate(lines, 1):
+            c.create_text(px(SPACE[3]), px(SPACE[2]) + lh * i + lh / 2, text=line, fill=T["text"], font=F["caption"], anchor="w")
+        self.tipwin.geometry(f"{w}x{h}+{cx - w // 2}+{top - h - px(SPACE[2])}")
+
+    def _place(self, k):
+        rise = px(MOTION["rise"]) * (1 - k)
+        self.win.geometry(f"{self.w}x{self.h}+{self.x}+{round(self.y + rise)}")
+        self.win.attributes("-alpha", FLOAT_ALPHA * k)
+        if k <= 0:
+            self.win.geometry("+-20000+-20000")
+
+    def _schedule(self):
+        if self.job:
+            self.canvas.after_cancel(self.job)
+        self.job = self.canvas.after(self.POLL, self._check)
+
+    def _check(self):
+        self.job = None
+        if self.hovered or time.time() < self.until:
+            self._schedule()
+        else:
+            self.hide()
+
+    def _leave(self):
+        self.hovered = False
+        if hasattr(self, "tipwin"):
+            self._tip(None)
+        self.until = max(self.until, time.time() + 0.8)
+
+    def hide(self):
+        if self.show_t.target != 0:
+            self.show_t.to(0, MOTION["exit"], ease_colour)
 
 
 # ---------------------------------------------------------------- popup windows
@@ -2640,11 +2943,12 @@ def brand_mark(parent):
 
 class Panel(Popup):
     """Two pages in one window: the scratchpad, and settings with a sidebar
-    (General, Microphone, Dictionary, History)."""
+    (General, Microphone, Dictionary, History, Commands)."""
 
-    PAGES = ("General", "Microphone", "Dictionary", "History")
+    PAGES = ("General", "Microphone", "Dictionary", "History", "Commands")
     ICONS = {"General": GLYPH["settings"], "Microphone": GLYPH["mic"],
-             "Dictionary": GLYPH["dictionary"], "History": GLYPH["history"]}
+             "Dictionary": GLYPH["dictionary"], "History": GLYPH["history"],
+             "Commands": GLYPH["commands"]}
     NOTES_SIZE, SETTINGS_SIZE = (440, 560), (720, 600)
 
     def __init__(self, app):
@@ -2652,6 +2956,12 @@ class Panel(Popup):
         self.page = "notes"
         self.tab = "General"
         self.hist_page = 0
+        self.commands_view = "main"
+        self.commands_kind = "app"
+        self.command_target_id = None
+        self.command_search = ""
+        self.command_routine = None
+        self._target_icons = {}
         self._save_job = None
         self._pages = {}  # built settings pages, kept while their data hasn't changed
         self.notes_root = tk.Frame(self.frame, bg=T["bg"])
@@ -2663,6 +2973,7 @@ class Panel(Popup):
     def show(self, page, tab=None, pinned=False):
         self.app.picker.hide()
         self.app.mic_menu.hide()
+        self.app.panel_leave = None  # a previous close-away timer must not close the reopened panel
         self.page = "notes" if page == "notes" else "settings"
         if self.page == "notes":
             self.settings_root.pack_forget()
@@ -2769,6 +3080,9 @@ class Panel(Popup):
         if name not in self.PAGES:
             name = "General"
         changed = name != self.tab
+        if changed and name == "Commands":
+            self.commands_view = "main"
+            self.app.refresh_commands()   # pick up apps installed since the last look
         self.tab = name
         self.page_title.config(text=name)
         inner = self.scroll.inner
@@ -2790,6 +3104,31 @@ class Panel(Popup):
             self.scroll.canvas.yview_moveto(y)
             self.scroll._sync()
         self.nav.select(name)  # after building the page, so the slide isn't swallowed by it
+
+    def _show_commands_view(self, view):
+        self.commands_view = view
+        page = self._pages.pop("Commands", None)
+        if page is not None:
+            page.destroy()
+        self.open_tab("Commands")
+
+    def _target_icon(self, parent, target, size=20):
+        key = (target.id, size)
+        image = self._target_icons.get(key)
+        if image is None:
+            try:
+                raw = winactions.icon_image(target, px(size))
+                image = ImageTk.PhotoImage(raw) if raw else False
+            except Exception:
+                image = False
+            self._target_icons[key] = image
+        if image:
+            widget = tk.Label(parent, image=image, bg=parent.cget("bg"), bd=0)
+            widget.image = image
+            return widget
+        glyph_name = "folder" if target.kind == "folder" else "web" if target.kind == "website" else "commands"
+        return tk.Label(parent, text=GLYPH[glyph_name], font=F["icon"], fg=T["dim"],
+                        bg=parent.cget("bg"), bd=0)
 
     def _switch(self, right, key, getter=None, setter=None):
         cfg = self.app.cfg
@@ -2830,7 +3169,7 @@ class Panel(Popup):
 
         b = group(p, "Text")
         self._switch(row(b, "Remove filler words", 'Drops "um" and "uh"'), "remove_fillers")
-        self._switch(row(b, "Voice commands", 'Say "new line" or "new paragraph"'), "voice_commands")
+        self._switch(row(b, "Spoken formatting", 'Say "new line" or "new paragraph"'), "voice_commands")
         self._switch(row(b, "Lists", 'Say "one… two…" or "next point…" to make a list'), "smart_lists")
         self._switch(row(b, "Learn from my fixes", "Adds names you correct to the dictionary"),
                      "learn_corrections")
@@ -2953,6 +3292,334 @@ class Panel(Popup):
         Button(foot, "Open full history", lambda: os.startfile(HISTORY_PATH) if HISTORY_PATH.exists() else None,
                kind="subtle", font=F["caption"]).pack(side="left")
 
+    # -- Commands
+    def _page_commands(self, p):
+        if self.commands_view == "add":
+            self._page_add_name(p)
+            return
+        if self.commands_view == "routine":
+            self._page_routine(p)
+            return
+        self.page_title.config(text="Commands")
+        b = group(p)
+        self._switch(row(b, "Run commands with the wake word",
+                         f'“{self.app.cfg["wake_phrase"]}, open Spotify” · off: it only dictates'),
+                     "commands_enabled")
+
+        b = group(p, "Routines")
+        targets = {t.id: t for t in self.app.commands.catalog}
+        if not self.app.commands.routines:
+            row(b, "No routines yet", "Run several safe Commands with one phrase")
+        for i, routine in enumerate(self.app.commands.routines):
+            desc = f"{len(routine.steps)} step" + ("" if len(routine.steps) == 1 else "s")
+            if routine.suggested:
+                desc += " · Suggested"
+            right = row(b, routine.name, desc)
+            Button(right, "Edit", lambda index=i: self._edit_routine(index), font=F["caption"]).pack(side="right")
+            for step in reversed(routine.steps[:3]):
+                target = targets.get(step.target_id)
+                if target:
+                    self._target_icon(right, target).pack(side="right", padx=(0, px(SPACE[1])))
+        right = row(b, "New routine", "Choose a phrase, then add steps")
+        Button(right, "New routine", self._new_routine).pack()
+
+        b = group(p, "Names")
+        aliases = list(self.app.commands.aliases)
+        if not aliases:
+            row(b, "No names yet", "Add a shorter spoken name for an app, folder or website")
+        for alias in aliases:
+            target = targets.get(alias.target_id)
+            if target is None:
+                continue
+            spoken = alias.say + (" folder" if target.kind == "folder" and not alias.say.endswith("folder") else "")
+            right = row(b, spoken, f"Opens {target.name}" + (" · Suggested" if alias.suggested else ""))
+            Button(right, GLYPH["delete"], lambda a=alias: self._remove_alias(a), kind="subtle",
+                   icon=True, pad_x=8).pack(side="right")
+            self._target_icon(right, target).pack(side="right", padx=(0, px(SPACE[2])))
+        right = row(b, "Add a name", "Apps, folders and websites")
+        Button(right, "Add name", lambda: self._show_commands_view("add")).pack()
+
+        b = group(p, "What you can say")
+        for phrase, note in (("“Open Spotify”", "Switches if it’s already running"),
+                             ("“Pause” · “Next” · “Volume 30”", "Controls whatever is playing"),
+                             ("“Open Downloads folder”", "Folders, drives and settings pages"),
+                             ("“Search YouTube for lo-fi”", "Spotify, YouTube or the web"),
+                             ("“Close Spotify” · “Minimise everything”", "Closing 2+ apps asks first")):
+            row(b, phrase, note)
+
+    def _remove_alias(self, alias):
+        suggested_names = {commands.normalise(say) for say, _ in commands.SUGGESTED_ALIASES}
+        key = commands.normalise(alias.say)
+        if (alias.suggested or key in suggested_names) and key not in self.app.cfg["suggestions_dismissed"]:
+            self.app.cfg["suggestions_dismissed"].append(key)
+        self.app.commands.aliases = [a for a in self.app.commands.aliases if a != alias]
+        self._save_aliases()
+        self.open_tab("Commands", keep_scroll=True)
+
+    def _save_aliases(self):
+        self.app.cfg["aliases"] = [a.__dict__ for a in self.app.commands.aliases]
+        save_config(self.app.cfg)
+
+    def _page_add_name(self, p):
+        self.page_title.config(text="Add a name")
+        top = tk.Frame(p, bg=T["bg"])
+        top.pack(fill="x", pady=(px(SPACE[2]), px(SPACE[2])))
+        Button(top, "← Commands", lambda: self._show_commands_view("main"), kind="subtle").pack(side="left")
+
+        b = group(p)
+        right = row(b, "Find a target")
+        search = RoundedEntry(right, 18)
+        search.entry.insert(0, self.command_search)
+        search.pack(side="right", padx=(px(SPACE[2]), 0))
+        kinds = (("app", "Apps"), ("folder", "Folders"), ("website", "Website"))
+        Segmented(right, kinds, self.commands_kind, self._set_commands_kind).pack(side="right")
+
+        def search_changed(_=None):
+            self.command_search = search.entry.get().strip()
+            self._rebuild_add_name()
+        search.entry.bind("<Return>", search_changed)
+        Button(right, "Search", search_changed, font=F["caption"]).pack(side="right", padx=(px(SPACE[1]), 0))
+
+        target = next((t for t in self.app.commands.catalog if t.id == self.command_target_id), None)
+        query = commands.normalise(self.command_search)
+        choices = [t for t in self.app.commands.catalog if t.kind == self.commands_kind]
+        if query:
+            choices = [t for t in choices if query in commands.normalise(t.name)]
+        elif self.commands_kind == "app":
+            preferred = commands.top_apps(choices, self.app.commands.usage, self.app.commands.windows_usage)
+            choices = preferred + [t for t in choices if t not in preferred]
+        choices = choices[:10]
+
+        b = group(p, "Results")
+        if not choices:
+            row(b, "No matches", "Try a different name")
+        for choice in choices:
+            right = row(b, choice.name, "Selected" if target and choice.id == target.id else None)
+            Button(right, "Selected" if target and choice.id == target.id else "Choose",
+                   lambda target_id=choice.id: self._select_command_target(target_id),
+                   kind="selected" if target and choice.id == target.id else "standard",
+                   font=F["caption"]).pack(side="right")
+            self._target_icon(right, choice).pack(side="right", padx=(0, px(SPACE[2])))
+
+        if self.commands_kind == "app":
+            tools = tk.Frame(p, bg=T["bg"])
+            tools.pack(fill="x", pady=(px(SPACE[2]), 0))
+            Button(tools, "Add your own app", self._pick_user_app, kind="subtle").pack(side="left")
+        elif self.commands_kind == "folder":
+            tools = tk.Frame(p, bg=T["bg"])
+            tools.pack(fill="x", pady=(px(SPACE[2]), 0))
+            Button(tools, "Add folder", self._pick_user_folder, kind="subtle").pack(side="left")
+        else:
+            site = group(p, "Add website")
+            name_right = row(site, "Name")
+            site_name = RoundedEntry(name_right, 22)
+            site_name.pack()
+            url_right = row(site, "Address", "Starts with https://")
+            site_url = RoundedEntry(url_right, 22)
+            site_url.pack(side="right", padx=(px(SPACE[2]), 0))
+            Button(url_right, "Add",
+                   lambda: self._add_website(site_name.entry.get(), site_url.entry.get()),
+                   kind="primary").pack(side="right")
+
+        b = group(p, "Spoken name")
+        right = row(b, "Say it as", f"Opens {target.name}" if target else "Choose a target above")
+        say = RoundedEntry(right, 16)
+        say.pack(side="right", padx=(px(SPACE[2]), 0))
+        add = Button(right, "Add", lambda: self._add_alias(say.entry.get()), kind="primary")
+        add.pack(side="right")
+        say.entry.bind("<Return>", lambda e: self._add_alias(say.entry.get()))
+        self._add_name_entry = say.entry
+
+    def _set_commands_kind(self, kind):
+        self.commands_kind, self.command_target_id, self.command_search = kind, None, ""
+        self._rebuild_add_name()
+
+    def _rebuild_add_name(self):
+        self._show_commands_view("add")
+
+    def _select_command_target(self, target_id):
+        self.command_target_id = target_id
+        self._rebuild_add_name()
+
+    def _add_alias(self, spoken):
+        spoken = spoken.strip()
+        target = next((t for t in self.app.commands.catalog if t.id == self.command_target_id), None)
+        if not spoken or target is None:
+            return
+        normal = commands.normalise(spoken)
+        if target.kind == "folder" and not normal.endswith(" folder"):
+            spoken += " folder"
+            normal = commands.normalise(spoken)
+        suggested_names = {commands.normalise(say) for say, _ in commands.SUGGESTED_ALIASES}
+        if normal in suggested_names and normal not in self.app.cfg["suggestions_dismissed"]:
+            self.app.cfg["suggestions_dismissed"].append(normal)
+        self.app.commands.aliases = [a for a in self.app.commands.aliases
+                                     if commands.normalise(a.say) != normal]
+        self.app.commands.aliases.append(commands.Alias(spoken, target.id))
+        self._save_aliases()
+        self.command_target_id, self.command_search = None, ""
+        self._show_commands_view("main")
+
+    def _pick_user_app(self):
+        path = filedialog.askopenfilename(parent=self.win, title="Add an app",
+                                          filetypes=[("Apps and shortcuts", "*.exe *.bat *.lnk")])
+        if not path:
+            return
+        item = {"name": Path(path).stem, "path": path}
+        target = winactions.user_targets([item])[0]
+        if all(a.get("path") != path for a in self.app.cfg["user_apps"]):
+            self.app.cfg["user_apps"].append(item)
+            save_config(self.app.cfg)
+        if all(t.id != target.id for t in self.app.commands.catalog):
+            self.app.commands.catalog.append(target)
+        self.command_target_id = target.id
+        self._rebuild_add_name()
+
+    def _pick_user_folder(self):
+        path = filedialog.askdirectory(parent=self.win, title="Add a folder")
+        if path:
+            self._add_user_place(Path(path).name, path, "folder")
+
+    def _add_website(self, name, url):
+        name, url = name.strip(), url.strip()
+        if not name or not url.lower().startswith(("http://", "https://")):
+            return
+        self._add_user_place(name, url, "website")
+
+    def _add_user_place(self, name, path, kind):
+        item = {"name": name, "path": path, "kind": kind}
+        targets = winactions.custom_places([item])
+        if not targets:
+            return
+        target = targets[0]
+        if all(p.get("path") != path for p in self.app.cfg["user_places"]):
+            self.app.cfg["user_places"].append(item)
+            save_config(self.app.cfg)
+        if all(t.id != target.id for t in self.app.commands.catalog):
+            self.app.commands.catalog.append(target)
+        self.command_target_id = target.id
+        self._rebuild_add_name()
+
+    def _new_routine(self):
+        self.app.commands.routines.append(commands.Routine("New routine"))
+        self.command_routine = len(self.app.commands.routines) - 1
+        self._save_routines()
+        self._show_commands_view("routine")
+
+    def _edit_routine(self, index):
+        self.command_routine = index
+        self._show_commands_view("routine")
+
+    def _save_routines(self):
+        self.app.cfg["routines"] = [commands.routine_to_dict(r) for r in self.app.commands.routines]
+        save_config(self.app.cfg)
+
+    def _page_routine(self, p):
+        if self.command_routine is None or self.command_routine >= len(self.app.commands.routines):
+            self._show_commands_view("main")
+            return
+        routine = self.app.commands.routines[self.command_routine]
+        self.page_title.config(text=routine.name)
+        top = tk.Frame(p, bg=T["bg"])
+        top.pack(fill="x", pady=(px(SPACE[2]), px(SPACE[2])))
+        Button(top, "← Commands", lambda: self._show_commands_view("main"), kind="subtle").pack(side="left")
+
+        b = group(p)
+        right = row(b, "Name", "What you say after the wake word")
+        name = RoundedEntry(right, 18)
+        name.entry.insert(0, routine.name)
+        name.pack(side="right", padx=(px(SPACE[2]), 0))
+        Button(right, "Save", lambda: self._rename_routine(name.entry.get()), font=F["caption"]).pack(side="right")
+        name.entry.bind("<Return>", lambda e: self._rename_routine(name.entry.get()))
+
+        b = group(p, "Steps")
+        if not routine.steps:
+            row(b, "No steps yet", "Add one below")
+        targets = {t.id: t for t in self.app.commands.catalog}
+        for i, step in enumerate(routine.steps):
+            if step.type == "open":
+                title = "Open " + targets.get(step.target_id, commands.Target("", "Missing app")).name
+            elif step.type == "close":
+                title = "Close " + targets.get(step.target_id, commands.Target("", "Missing app")).name
+            elif step.type == "close_all_except":
+                kept = [targets[k].name for k in step.keep if k in targets]
+                title = "Close all except " + (", ".join(kept) or "nothing")
+            elif step.type == "minimise_all":
+                title = "Minimise everything"
+            else:
+                title = step.action.title()
+            right = row(b, title)
+            Button(right, GLYPH["delete"], lambda index=i: self._remove_routine_step(index),
+                   kind="subtle", icon=True, pad_x=8).pack()
+
+        b = group(p, "Add step", "Routines can open or close Targets, control media, or clear the desktop.")
+        apps = commands.top_apps(self.app.commands.catalog, self.app.commands.usage,
+                                 self.app.commands.windows_usage)[:5]
+        places = [t for t in self.app.commands.catalog if t.kind != "app"][:3]
+        for target in apps + places:
+            right = row(b, target.name)
+            if target.kind == "app":
+                Button(right, "Close", lambda t=target: self._add_routine_step("close", t.id),
+                       kind="subtle", font=F["caption"]).pack(side="right")
+            Button(right, "Open", lambda t=target: self._add_routine_step("open", t.id),
+                   font=F["caption"]).pack(side="right", padx=(0, px(SPACE[1])))
+        right = row(b, "Desktop and media")
+        Button(right, "Minimise all", lambda: self._add_routine_step("minimise_all"),
+               font=F["caption"]).pack(side="right")
+        Button(right, "Pause", lambda: self._add_routine_step("media", action="pause"),
+               kind="subtle", font=F["caption"]).pack(side="right")
+        explorer = next((t for t in self.app.commands.catalog if t.name == "File Explorer"), None)
+        if explorer:
+            right = row(b, "Wrap up safely", "Closing several apps still asks first")
+            Button(right, "Close all except Explorer",
+                   lambda: self._add_routine_step("close_all_except", keep=(explorer.id,)),
+                   font=F["caption"]).pack()
+
+        foot = tk.Frame(p, bg=T["bg"])
+        foot.pack(fill="x", pady=(px(SPACE[5]), 0))
+        Button(foot, "Delete routine", self._delete_routine, kind="danger").pack(side="left")
+
+    def _rename_routine(self, name):
+        name = name.strip()
+        if not name:
+            return
+        old = self.app.commands.routines[self.command_routine]
+        self._dismiss_suggested_routine(old)
+        self.app.commands.routines[self.command_routine] = commands.Routine(name, old.steps, False)
+        self._save_routines()
+        self._show_commands_view("routine")
+
+    def _add_routine_step(self, kind, target_id="", keep=(), action=""):
+        old = self.app.commands.routines[self.command_routine]
+        self._dismiss_suggested_routine(old)
+        step = commands.RoutineStep(kind, target_id, tuple(keep), action)
+        self.app.commands.routines[self.command_routine] = commands.Routine(old.name, old.steps + (step,), False)
+        self._save_routines()
+        self._show_commands_view("routine")
+
+    def _remove_routine_step(self, index):
+        old = self.app.commands.routines[self.command_routine]
+        self._dismiss_suggested_routine(old)
+        steps = old.steps[:index] + old.steps[index + 1:]
+        self.app.commands.routines[self.command_routine] = commands.Routine(old.name, steps, False)
+        self._save_routines()
+        self._show_commands_view("routine")
+
+    def _delete_routine(self):
+        routine = self.app.commands.routines[self.command_routine]
+        self._dismiss_suggested_routine(routine, known_name=True)
+        del self.app.commands.routines[self.command_routine]
+        self.command_routine = None
+        self._save_routines()
+        self._show_commands_view("main")
+
+    def _dismiss_suggested_routine(self, routine, known_name=False):
+        key = commands.normalise(routine.name)
+        templates = {"work mode", "break time", "wrap up"}
+        if (routine.suggested or (known_name and key in templates)) \
+                and key not in self.app.cfg["suggestions_dismissed"]:
+            self.app.cfg["suggestions_dismissed"].append(key)
+
     def _hist_note(self, text):
         self.hist_status.config(text=text)
         self.win.after(2000, lambda: self.visible and self.tab == "History" and self.hist_status.winfo_exists()
@@ -3038,6 +3705,8 @@ class App:
     DOUBLE_TAP = 0.45     # max seconds between the two taps
     TAP = 0.3             # a press shorter than this is a tap, not a hold
     HANDSFREE_MAX = 600   # stop hands-free automatically after 10 minutes
+    EARLY_PAUSE = 0.7     # a pause this long checks whether a Command is already complete
+    CONFIRM_WAIT = MOTION["confirm_wait"] / 1000   # silence that cancels a Confirmation
 
     def __init__(self):
         self.cfg = load_config()
@@ -3057,6 +3726,18 @@ class App:
         self.ambient = AmbientListener(self)
         self.mics.before_restart = lambda: (self._close_mic(), self.ambient.close_mic())
         self.wake_session = False   # the current dictation was started by the wake word
+        self.peeked_at = 0          # last_voice time of the pause already checked for a Command
+        self.answer_turn = False    # the current turn is a yes/no for a Confirmation
+        self.catalog_loading, self.catalog_loaded_at = False, 0.0
+        self.asking = None          # the Confirmation waiting for an answer
+        aliases = [commands.Alias(a["say"], a["target_id"], a.get("suggested", False))
+                   for a in self.cfg["aliases"] if isinstance(a, dict) and a.get("say") and a.get("target_id")]
+        routines = [commands.routine_from_dict(r) for r in self.cfg["routines"]
+                    if isinstance(r, dict) and r.get("name")]
+        self.commands = commands.Context(
+            catalog=[], actions=winactions.Actions(lambda: self.commands.catalog), log=log,
+            aliases=aliases, routines=routines, usage=commands.read_command_usage(COMMAND_LOG_PATH),
+            on_use=self._record_command_use)
         self.last_voice = 0
         self.state_lock = threading.Lock()
         self.starting = False      # mic is being opened in the background
@@ -3094,6 +3775,7 @@ class App:
         self.overlay = Overlay(self.root, self.cfg["show_idle_pill"], key_label(self.cfg["hold_keys"]))
         self.overlay.set("message", "Loading speech model…")
         self.bar = HoverBar(self)
+        self.card = CommandCard(self)
         self.last_tick = time.time()
         self.last_area_check = 0
         self.area = self._area()
@@ -3112,7 +3794,90 @@ class App:
         self._start_tray()
         threading.Thread(target=self._load_engine, daemon=True).start()
         threading.Thread(target=self._watch_mics, daemon=True).start()
+        self.refresh_commands()
         self.root.after(30, self._tick)
+
+    def _early_check(self, session):
+        """On a short pause in a wake-word turn: if what's been said is already a whole
+        Command ("open Spotify"), end the turn now instead of waiting the full pause."""
+        try:
+            text = session.peek()
+        except Exception as e:
+            log("Early command check failed:", repr(e))
+            return
+        if text and commands.is_complete_command(text, self.commands):
+            self.post("call", lambda: self.session is session and self._end_turn_early())
+
+    def _end_turn_early(self):
+        self.handsfree = False
+        self._stop()
+
+    CATALOG_REFRESH = 600   # seconds: apps installed while running become openable by voice
+
+    def refresh_commands(self):
+        """Re-list installed apps in the background (startup, every few minutes, and
+        when the Commands page opens). One listing at a time."""
+        if self.catalog_loading:
+            return
+        self.catalog_loading, self.catalog_loaded_at = True, time.time()
+        threading.Thread(target=self._load_commands, daemon=True).start()
+
+    def _load_commands(self):
+        """Lists the installed apps for Commands (takes ~1 s, so off the UI thread)."""
+        try:
+            self.commands.catalog = winactions.load_catalog(self.cfg["user_apps"], self.cfg["user_places"])
+            self.commands.windows_usage = winactions.windows_usage(self.commands.catalog)
+            existing = {commands.normalise(a.say) for a in self.commands.aliases}
+            suggested = [a for a in commands.suggested_aliases(
+                self.commands.catalog, set(self.cfg["suggestions_dismissed"]))
+                if commands.normalise(a.say) not in existing]
+            if suggested:
+                self.commands.aliases.extend(suggested)
+                self.cfg["aliases"] = [a.__dict__ for a in self.commands.aliases]
+                save_config(self.cfg)
+            routine_names = {commands.normalise(r.name) for r in self.commands.routines}
+            suggested_routines = [r for r in commands.suggested_routines(
+                self.commands.catalog, set(self.cfg["suggestions_dismissed"]))
+                if commands.normalise(r.name) not in routine_names]
+            if suggested_routines:
+                self.commands.routines.extend(suggested_routines)
+                self.cfg["routines"] = [commands.routine_to_dict(r) for r in self.commands.routines]
+                save_config(self.cfg)
+            apps = sum(t.kind == "app" for t in self.commands.catalog)
+            log(f"Commands: {apps} apps, {len(self.commands.catalog) - apps} places")
+            self.post("call", lambda: self.panel.visible and self.panel.tab == "Commands"
+                      and self.panel.commands_view == "main" and self.panel.refresh())  # never mid-edit
+        except Exception as e:
+            log("Couldn't list apps for Commands:", repr(e))
+        finally:
+            self.catalog_loading = False
+
+    def _record_command_use(self, target_id, heard):
+        try:
+            commands.append_command(COMMAND_LOG_PATH, heard, target_id)
+        except OSError as e:
+            log("Couldn't write command log:", repr(e))
+
+    def _run_command(self, text):
+        """Returns True when the text was a Command (or a No match) and must not be pasted."""
+        out = commands.handle(text, self.commands)
+        if isinstance(out, commands.Dictation):
+            return False
+        if isinstance(out, commands.NeedsConfirmation):
+            log(f"Command: {text!r} -> asks {out.question}")
+            self.asking = out
+            self.post("overlay", "idle")
+            self.post("ask", out)
+            return True
+        card = out.card
+        log(f"Command: {text!r} -> {type(out).__name__} {card.verb} {card.obj}")
+        if card.kind == "done":
+            self._beep(*TONES["success"])
+        else:
+            self._beep(*TONES["miss"])   # a miss, not an error
+        self.post("overlay", "idle")
+        self.post("card", card)
+        return True
 
     # -- background events -> UI thread
     def post(self, *msg):
@@ -3146,6 +3911,8 @@ class App:
             if self._area() != self.area:
                 self._rebuild_bars("screen or taskbar changed")
         self.last_tick = now
+        if now - self.catalog_loaded_at > self.CATALOG_REFRESH:
+            self.refresh_commands()
         fg = user32.GetForegroundWindow()
         if fg:  # remember the last app you were in (any window not owned by LocalFlow)
             pid = ctypes.wintypes.DWORD()
@@ -3157,8 +3924,19 @@ class App:
             self.overlay.set("message", "Starting mic…")
         self.overlay.listening = self.ambient.running and self.ambient.mic is not None
         self.overlay.finish_hint = "Pause to finish" if self.wake_session else None
+        self.overlay.command_mode = self.wake_session and self.cfg["commands_enabled"]
         if self.session and self.wake_session:
             quiet = now - self.last_voice
+            if self.answer_turn:
+                if self.wake_heard_voice and quiet > self.EARLY_PAUSE:
+                    self.handsfree = False
+                    self._stop()
+                elif not self.wake_heard_voice and now - self.press_time > self.CONFIRM_WAIT:
+                    self.on_escape()   # silence: keep the apps open
+            elif self.cfg["commands_enabled"] and getattr(self, "wake_heard_voice", False) \
+                    and quiet > self.EARLY_PAUSE and self.peeked_at != self.last_voice:
+                self.peeked_at = self.last_voice   # once per pause
+                threading.Thread(target=self._early_check, args=(self.session,), daemon=True).start()
             if getattr(self, "wake_heard_voice", False) and quiet > self.cfg["ambient_end_silence"]:
                 self.handsfree = False
                 self._stop()
@@ -3193,7 +3971,8 @@ class App:
         overlay.levels = old_overlay.levels
         self.overlay = overlay
         self.bar = HoverBar(self)
-        for w in (old_overlay.win, old_bar.win):
+        old_card, self.card = self.card, CommandCard(self)
+        for w in (old_overlay.win, old_bar.win, old_card.win):
             try:
                 w.destroy()
             except Exception:
@@ -3252,15 +4031,60 @@ class App:
     def _ui_overlay(self, state, text="", seconds=0):
         self.overlay.set(state, text, seconds)
 
+    def _ui_card(self, card):
+        self.card.show(card)
+
+    def _ui_ask(self, asked):
+        """Show the Confirmation and listen for yes/no once this turn has finished."""
+        self.card.ask(asked, self._answered)
+
+        give_up = time.time() + self.CONFIRM_WAIT
+
+        def listen():
+            if self.asking is not asked:
+                return
+            if self.busy or self.session or self.starting:
+                if time.time() > give_up:   # the last turn never finished: keep the apps open
+                    self._answered(False, asked)
+                    return
+                self.root.after(50, listen)
+                return
+            mic = self.ambient.mic if self.ambient.running else None
+            if mic is not None:
+                threading.Thread(target=self.on_wake, args=(mic, True), daemon=True).start()
+            else:   # no wake-word mic: the buttons answer, silence still cancels
+                self.root.after(int(self.CONFIRM_WAIT * 1000), lambda: self._answered(False, asked))
+        listen()
+
+    def _answered(self, yes, asked=None):
+        """A Confirmation was answered (voice, button, silence). Any thread; runs once."""
+        asked = asked or self.asking
+        if asked is None or self.asking is not asked:
+            return
+        self.asking = None
+        if self.answer_turn and self.session:
+            self.post("call", self.on_escape)   # a button click ends the listening turn
+
+        def run():
+            out = commands.confirm(asked, yes, self.commands)
+            if isinstance(out, commands.NeedsConfirmation):
+                self.asking = out
+                self.post("ask", out)
+                return
+            if yes:
+                self._beep(*TONES["success"])
+            self.post("card", out.card)
+        threading.Thread(target=run, daemon=True).start()
+
     def _ui_level(self, level):
         self.overlay.push_level(level)
 
     def _ui_call(self, fn):
         fn()
 
-    def _beep(self, freq):
+    def _beep(self, freq, ms=50):
         if self.cfg["sounds"]:
-            threading.Thread(target=winsound.Beep, args=(freq, 50), daemon=True).start()
+            threading.Thread(target=winsound.Beep, args=(freq, ms), daemon=True).start()
 
     def set_option(self, key, value):
         self.cfg[key] = value
@@ -3271,6 +4095,13 @@ class App:
             self.overlay.show_idle = value
 
     def open_panel(self, page, tab=None, pinned=False):
+        try:
+            valid = (self.panel.win.winfo_exists() and self.panel.notes_root.winfo_exists()
+                     and self.panel.settings_root.winfo_exists())
+        except tk.TclError:
+            valid = False
+        if not valid:
+            self.panel = Panel(self)
         self.panel.show(page, tab=tab, pinned=pinned)
 
     def _load_engine(self):
@@ -3314,15 +4145,17 @@ class App:
         # or Windows may stop sending it key presses.
         threading.Thread(target=self._open_session, daemon=True).start()
 
-    def on_wake(self, mic):
-        """Called by the listener (its thread) when it hears the wake phrase."""
+    def on_wake(self, mic, answer=False):
+        """Called by the listener (its thread) when it hears the wake phrase. With
+        answer=True it opens a short turn for a yes/no Confirmation instead (no chime)."""
         with self.state_lock:
             if self.session or self.starting or self.busy:
                 return
             self.starting = True
         self.watcher.cancel()
-        for freq, ms in ((660, 70), (990, 110)):  # always play: it's your cue to talk
-            winsound.Beep(freq, ms)
+        if not answer:
+            for freq, ms in TONES["wake"]:  # always play: it's your cue to talk
+                winsound.Beep(freq, ms)
         try:
             mic.detach()
             session = Session(self.engine, self._wake_level, mic)
@@ -3335,7 +4168,7 @@ class App:
         self.press_time = self.last_voice = now
         self.wake_heard_voice = False
         with self.state_lock:
-            self.handsfree, self.wake_session = True, True
+            self.handsfree, self.wake_session, self.answer_turn = True, True, answer
             self.session, self.starting = session, False
 
     def _wake_level(self, level):
@@ -3504,11 +4337,14 @@ class App:
 
     def on_escape(self):
         if self.handsfree and self.session:
+            answering, self.answer_turn = self.answer_turn, False
+            if answering:
+                self._answered(False)   # the card says "Kept open"
             self.wake_session = False
             self.handsfree = False
             self.session.cancel()
             self.session = None
-            self.post("overlay", "message", "Cancelled", 1.2)
+            self.post("overlay", "idle" if answering else "message", "" if answering else "Cancelled", 1.2)
 
     def on_release(self):
         if self.ignore_release:
@@ -3537,20 +4373,33 @@ class App:
         self._stop()
 
     def _stop(self):
-        self.wake_session = False
+        handsfree_turn, self.wake_session = self.wake_session, False
+        answer_turn, self.answer_turn = self.answer_turn, False
         session, self.session = self.session, None
         if not session:
             return
         self.busy = True
         self._beep(660)
         self.post("overlay", "busy")
-        threading.Thread(target=self._finish, args=(session,), daemon=True).start()
+        threading.Thread(target=self._finish, args=(session, handsfree_turn, answer_turn), daemon=True).start()
 
-    def _finish(self, session):
+    def _finish(self, session, handsfree_turn=False, answer_turn=False):
         try:
+            # Hold-to-talk with nowhere to type (desktop, Spotify, a web page) runs Commands.
+            # Checked at release, before the focus can move; unclear stays Dictation.
+            nowhere_to_type = (not handsfree_turn and not answer_turn and self.cfg["commands_enabled"]
+                               and winactions.focus_is_text_field() is False)
             t = time.time()
             text = session.finish()
             asr_time = time.time() - t
+            if answer_turn:
+                reply = commands.answer(text)
+                log(f"Confirmation answer: {text!r} -> {reply}")
+                self.post("overlay", "idle")
+                self._answered(reply == "yes")
+                return
+            if (handsfree_turn or nowhere_to_type) and self.cfg["commands_enabled"] and text                     and self._run_command(text):
+                return
             if self.cfg["llm_cleanup"] and text:
                 try:
                     text = llm_cleanup(text, self.cfg)
@@ -3752,6 +4601,7 @@ class App:
             pass
         self.tray.stop()
         keyboard.unhook_all()
+        release_single_instance()
         self.root.destroy()
         os._exit(0)
 
@@ -3769,8 +4619,15 @@ def acquire_single_instance():
 
 
 def release_single_instance():
+    global _mutex
     if _mutex:
         ctypes.windll.kernel32.CloseHandle(_mutex)
+        _mutex = None
+    try:
+        if PID_PATH.exists() and PID_PATH.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            PID_PATH.unlink()
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":
@@ -3778,5 +4635,6 @@ if __name__ == "__main__":
         ctypes.windll.user32.MessageBoxW(None, "LocalFlow is already running (see the tray icon).",
                                          "LocalFlow", 0x40)
         sys.exit(0)
+    PID_PATH.write_text(str(os.getpid()), encoding="utf-8")
     log("Starting LocalFlow")
     App().run()

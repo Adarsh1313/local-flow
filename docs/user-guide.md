@@ -6,8 +6,9 @@ text is typed wherever your cursor is. No account, no internet, no cost.
 ## Install
 
 1. Install Python 3.12 from python.org.
-2. Double-click `localflow\setup.bat` (creates `.venv` and installs everything).
-3. Double-click `localflow\run.bat`. The first start downloads the speech model
+2. Double-click `localflow\setup.bat` (creates `.venv`, installs everything and adds
+   LocalFlow to the Start menu, plus Start/Stop shortcuts on the Desktop).
+3. Open **LocalFlow** from Start or double-click `localflow\run.bat`. The first start downloads the speech model
    (~650 MB, once). After that it starts in about 10 seconds.
 
 A small bar appears above the taskbar and a mic icon in the system tray. LocalFlow
@@ -20,7 +21,7 @@ turns on **Start with Windows** the first time it runs (switch it off in Setting
 |---|---|
 | Hold to talk | Hold **Right Ctrl**, speak, let go |
 | Hands-free | Double-tap **Right Ctrl**, talk as long as you like, tap again to finish. **Esc** throws it away. Stops by itself after 10 minutes |
-| Wake word (opt-in) | Say **"Hey Jarvis"**, wait for the chime, talk. A 2-second pause finishes it |
+| Wake word (on by default) | Say **"Hey Jarvis"**, wait for the chime, talk. A 2-second pause finishes it |
 
 While you hold the key the pill shows a live waveform; on release it shows three dots
 until the text is pasted. Pressing another key while holding (e.g. Right Ctrl + C)
@@ -45,7 +46,7 @@ laptops: the keyboard handles it in hardware and Windows never sees it.
   point…" makes `-` bullets. It needs at least two items in order, and a bare "one"
   only counts at the start of a sentence, so "I have one question and two concerns"
   stays a sentence.
-- **Voice commands:** say "new line" or "new paragraph".
+- **Spoken formatting:** say "new line" or "new paragraph".
 - **Dictionary** swaps in the right spelling for words the model gets wrong (below).
 - **AI cleanup** (optional, off): grammar fixes with a local Ollama model.
 
@@ -54,7 +55,7 @@ laptops: the keyboard handles it in hardware and Windows never sees it.
 Hover the small bar above the taskbar and it becomes a toolbar:
 
 - **Scratchpad** — a notepad that saves as you type. Dictating while it's open types into it.
-- **Settings** — General, Microphone, Dictionary and History.
+- **Settings** — General, Microphone, Dictionary, History and Commands.
 - **Microphone** — pick the mic without opening settings.
 - **Paste last** — opens Recent transcripts.
 
@@ -86,12 +87,56 @@ specific mic; if it's disconnected, the best available one is used until it's ba
 
 ## Wake word
 
-Settings → General → Wake word → **Start with your voice**. Listens on the laptop mic,
+Settings → General → Wake word → **Start with your voice** is on by default. It listens on the laptop mic,
 so Bluetooth earbuds aren't stuck in call mode; the mic stays on while this is enabled.
 Nothing is recorded or saved while listening: only short bursts of speech (under 3 s,
 then a pause) are transcribed in memory and compared with the phrase by how they sound,
 so "hey jervis" still counts but "hey there" doesn't. **Last heard** shows the most
 recent burst, to help tune the phrase. Pause briefly after the phrase.
+
+## Commands
+
+With **Settings → Commands → Run commands with the wake word** on, a short instruction
+after “Hey Jarvis” acts on Windows instead of being pasted. The waveform turns ice blue
+and a card shows what happened. Commands stay out of Dictation History and Paste last.
+A complete Command acts after about a 0.7-second pause; ordinary Dictation still waits
+for the full pause.
+
+| Say | What happens |
+|---|---|
+| “Open Spotify” / “Can you open Claude?” | Opens it, or brings its existing window forward |
+| “Pause” / “Next” / “Previous” | Controls the player shown in Windows media controls |
+| “Volume 30” / “Mute” | Changes the main Windows output |
+| “Open Downloads folder” / “Open Bluetooth settings” | Opens a folder, drive or Settings page |
+| “Open LinkedIn” / “Open GitHub” | Opens common websites in the default browser |
+| “Search YouTube for lo-fi” / “Google weather” | Opens results in the appropriate app or browser |
+| “Close Spotify” / “Minimise everything” | Closes politely or clears the desktop |
+
+Closing two or more apps asks first. Say **yes**, **do it**, **no** or **cancel**, or use
+the card’s buttons. Silence cancels. LocalFlow never closes itself.
+
+Holding Right Ctrl with a text field focused always dictates. Holding it on the desktop,
+in a player, or somewhere else with clearly nowhere to type runs a Command. If Windows
+cannot tell what has focus, LocalFlow safely treats the speech as Dictation.
+
+### Names
+
+The Commands page lets you give an app, folder or website a spoken name: for example,
+“music” → Spotify. LocalFlow initially suggests useful names for installed apps; remove
+one and it stays removed. **Add a name** can also add an `.exe`, `.bat`, shortcut,
+project folder or website that is missing from the Start menu.
+
+### Routines
+
+A Routine runs several safe Commands from one phrase. The initial suggestions are
+**Work mode**, **Break time** and **Wrap up** when their Targets are installed. Edit the
+name and steps, or remove the Routine. Routine steps can open a Target, close an app,
+close all except chosen apps, minimise everything or control media. A Routine cannot
+run shell commands, and closing several apps still requires Confirmation.
+
+Commands can be conversational: **please**, **can you**, **could you** and **would you**
+are understood, as are endings such as **for me**. Common speech-recognition variants
+such as “clawed” or “cloud” are treated as Claude.
 
 ## Dictionary
 
@@ -128,6 +173,8 @@ Most settings are in the Settings window; these are the extra ones.
 | `replacements` | `{}` | Always-on swaps, e.g. `{"cube or net ease": "Kubernetes"}` |
 | `ollama_model` | `qwen2.5:3b` | Model used for AI cleanup |
 | `ambient_end_silence` | `2.0` | Seconds of quiet that end a wake-word dictation |
+| `ambient_mode` | `true` | Keep listening locally for the wake phrase |
+| `commands_enabled` | `true` | Run Commands after the wake word; off means wake-word Dictation only |
 
 ## AI cleanup with Ollama (optional)
 
@@ -139,5 +186,5 @@ Most settings are in the Settings window; these are the extra ones.
 
 - Elevated (admin) windows won't accept the paste unless LocalFlow also runs as admin.
 - Your clipboard is restored after each paste (unless something else changed it).
-- Everything LocalFlow keeps (history, dictionary, notes, settings, log, optional
-  training recordings) stays in its folder on your PC.
+- Everything LocalFlow keeps (history, dictionary, notes, settings, private command-use
+  log, optional training recordings) stays in its folder on your PC.

@@ -615,10 +615,11 @@ class MicStream:
             else:
                 self.preroll.append(a)
 
-    def attach(self, consumer):
+    def attach(self, consumer, preroll=True):
         with self.lock:
-            for chunk in self.preroll:
-                consumer(chunk)
+            if preroll:
+                for chunk in self.preroll:
+                    consumer(chunk)
             self.preroll.clear()
             self.consumer = consumer
 
@@ -731,8 +732,22 @@ class Session:
             if text:
                 self.parts.append(text)
 
+    def switch_mic(self, mic):
+        """Carry on recording from another mic (the headset, once it's awake).
+        Its preroll is skipped: the mic it replaces already recorded that moment."""
+        with self.lock:
+            if self.stopping.is_set():
+                return False
+            old, self.mic = self.mic, mic
+        old.detach()
+        mic.attach(self._callback, preroll=False)
+        if self.stopping.is_set():  # finished while switching
+            mic.detach()
+        return True
+
     def _close(self):
-        self.stopping.set()
+        with self.lock:
+            self.stopping.set()
         self.mic.detach()
 
     def peek(self):
@@ -775,21 +790,51 @@ class Session:
 # A run of at least two consecutive markers is needed (1 then 2), and a bare
 # "one"/"first" only counts at the start of a sentence, so "I have one question
 # and two concerns" stays a sentence. "Bullet point" / "next point" make "-" bullets.
+#
+# Spoken sequences work too: "First, open the app. Then sign in. Finally, check
+# the logs." becomes a numbered list. These need a "first" to start and at least
+# three steps, so "Then I went home." on its own stays prose; explicit numbers
+# ("second", "two") win over "then" when both are said. "Point one is speed"
+# drops the label and the "is": "1. Speed".
 
 NUM_WORDS = {w: i for i, w in enumerate("one two three four five six seven eight nine ten".split(), 1)}
 ORDINALS = {w: i for i, w in enumerate(
     "first second third fourth fifth sixth seventh eighth ninth tenth".split(), 1)}
-ORDINALS.update({"firstly": 1, "secondly": 2, "thirdly": 3})
-_ALT = lambda words: "|".join(sorted(words, key=len, reverse=True))
+ORDINALS.update({"firstly": 1, "secondly": 2, "thirdly": 3, "first of all": 1, "first off": 1,
+                 "to start with": 1, "to begin with": 1, "second of all": 2})
+_ALT = lambda words: "|".join(sorted(words, key=len, reverse=True)).replace(" ", r"\s+")
 LIST_MARKER = re.compile(
-    r"(?P<pre>^|(?<=[.!?:;,])\s+)(?:"
+    r"(?P<pre>^|(?<=[.!?:;,])\s+|\s+(?=and\s+(?:then|finally|lastly)\b))(?:and\s+)?(?:"
     r"(?P<digit>\d{1,2})[.):]\s+"
     rf"|(?P<word>{_ALT(NUM_WORDS)})[,.:]\s+"
     rf"|(?P<ord>{_ALT(ORDINALS)})\b[,.:]?\s+"
+    r"|(?P<seq>then|next(?!\s+(?:point|bullet))|after\s+that|after\s+this|afterwards)\b[,:]?\s+"
+    r"|(?P<last>finally|lastly|last\s+of\s+all)\b[,:]?\s+"
     r")"
-    rf"|\b(?:number|point|step|item)\s+(?P<pword>{_ALT(NUM_WORDS)}|\d{{1,2}})\b[,.:]?\s*"
-    r"|\b(?P<bullet>bullet point|bullet|next point|next bullet|new point|another point)\b[,.:]?\s*",
+    rf"|\b(?:number|point|step|item|option|reason|phase|stage|priority)\s+"
+    rf"(?P<pword>{_ALT(NUM_WORDS)}|\d{{1,2}})\b[,.:]?\s*"
+    r"|\b(?P<bullet>bullet point|bullet|next point|next bullet|new point|another point)\b[,.:]?\s*"
+    # "1. alpha 2. beta": the recogniser often leaves out the full stop before a digit
+    r"|(?<=\s)(?P<idigit>\d{1,2})[.)]\s+(?=[^\W\d_])",
     re.I)
+# "Point one is speed" -> "Speed"
+_LABEL_VERB = re.compile(r"^(?:is|are|was|will\s+be|would\s+be)\s+(?:that\s+)?", re.I)
+
+
+def _longest_run(marks, follows):
+    """Longest chain starting at a 1 where each later mark `follows(mark, want)`."""
+    run = []
+    for i, mark in enumerate(marks):
+        if mark[2] == "num" and mark[3] == 1:
+            seq, want = [mark], 2
+            for nxt in marks[i + 1:]:
+                if follows(nxt, want):
+                    seq.append(nxt)
+                    want += 1
+                    if nxt[2] == "last":
+                        break
+            run = seq if len(seq) > len(run) else run
+    return run
 
 
 def format_lists(text):
@@ -798,21 +843,18 @@ def format_lists(text):
         g = m.groupdict()
         if g["bullet"]:
             kind, value = "bullet", None
+        elif g["seq"] or g["last"]:
+            kind, value = "seq" if g["seq"] else "last", None
         else:
-            raw = (g["digit"] or g["word"] or g["ord"] or g["pword"]).lower()
+            raw = re.sub(r"\s+", " ", g["digit"] or g["word"] or g["ord"] or g["pword"] or g["idigit"]).lower()
             kind, value = "num", int(raw) if raw.isdigit() else NUM_WORDS.get(raw) or ORDINALS.get(raw)
-        marks.append((m.start() + len(g["pre"] or ""), m.end(), kind, value))
+        marks.append((m.start() + len(g["pre"] or ""), m.end(), kind, value, bool(g["pword"])))
 
-    run = []
-    for i, mark in enumerate(marks):  # longest 1, 2, 3... sequence
-        if mark[2] == "num" and mark[3] == 1:
-            seq, want = [mark], 2
-            for nxt in marks[i + 1:]:
-                if nxt[2] == "num" and nxt[3] == want:
-                    seq.append(nxt)
-                    want += 1
-            run = seq if len(seq) > len(run) else run
+    run = _longest_run(marks, lambda mk, want: mk[2] == "num" and mk[3] == want)
     numbered = len(run) >= 2
+    if not numbered:
+        run = _longest_run(marks, lambda mk, want: mk[2] in ("seq", "last"))
+        numbered = len(run) >= 3
     if not numbered:
         run = [mk for mk in marks if mk[2] == "bullet"]
         if len(run) < 2:
@@ -822,6 +864,8 @@ def format_lists(text):
     for j, mark in enumerate(run):
         item = text[mark[1]:run[j + 1][0] if j + 1 < len(run) else len(text)].strip()
         item = re.sub(r"(?:[\s,;.]|\band)+$", "", item, flags=re.I).strip()
+        if mark[4]:
+            item = _LABEL_VERB.sub("", item)
         if item:
             items.append(item[0].upper() + item[1:])
     if len(items) < 2:
@@ -2532,6 +2576,14 @@ class Popup:
         self.win.attributes("-topmost", True)
         self.win.geometry(self.OFFSCREEN)
         self.win.update_idletasks()
+        # Alt+F4 (or any WM_CLOSE) would destroy the window by default, and every
+        # later show() would then fail on its missing widgets
+        self.win.protocol("WM_DELETE_WINDOW", self.hide)
+        # Hidden popups only move off-screen, so without this they'd linger in
+        # Alt+Tab and Task View as "tk" windows that can't be closed. Set through Tk,
+        # not set_ex_style: Tk rebuilds the style from its own copy whenever "-alpha"
+        # changes (every fade-in), which would drop a bit it doesn't know about.
+        self.win.attributes("-toolwindow", True)
         round_corners(self.win)
         self.frame = tk.Frame(self.win, bg=T["bg"])
         self.frame.pack(fill="both", expand=True, padx=1, pady=1)
@@ -3832,12 +3884,25 @@ class App:
         self.ui.put(msg)
 
     def _tick(self):
+        """Runs every 33 ms and drives the whole UI, so an error in one step is
+        logged and skipped: if it escaped, the loop would stop and the app freeze."""
         try:
-            while True:
+            self._tick_once()
+        except Exception as e:
+            log("UI tick failed:", repr(e))
+        finally:
+            self.root.after(33, self._tick)
+
+    def _tick_once(self):
+        while True:
+            try:
                 msg = self.ui.get_nowait()
+            except queue.Empty:
+                break
+            try:
                 getattr(self, "_ui_" + msg[0])(*msg[1:])
-        except queue.Empty:
-            pass
+            except Exception as e:
+                log(f"UI message {msg[0]!r} failed:", repr(e))
         now = time.time()
         if now - self.last_tick > 5:
             self._rebuild_bars("woke from sleep")  # no ticks while the PC slept
@@ -3890,7 +3955,6 @@ class App:
                 self._beep(880)
         self._hover(now)
         self.overlay.draw()
-        self.root.after(33, self._tick)
 
     @staticmethod
     def _area():
@@ -4152,7 +4216,7 @@ class App:
         self.post("overlay", "message", "The mic got stuck · restarting LocalFlow…", 4)
         self.post("call", lambda: self.root.after(1500, lambda: self.restart("--after-audio-restart")))
 
-    def _ready_mic(self):
+    def _ready_mic(self, patience=2.0):
         if self.audio_stuck:
             raise MicStuck("waiting for LocalFlow to restart the audio system")
         """An open mic that is actually sending audio. Bluetooth headsets sometimes open
@@ -4160,7 +4224,7 @@ class App:
         usually fixes it, and if it doesn't, auto mode falls back to another mic."""
         try:
             mic = self._ensure_mic()
-            if mic.wait_audio(2.0):  # Bluetooth needs up to ~1 s to start sending
+            if mic.wait_audio(patience):  # Bluetooth needs ~1-2 s, sometimes more, to start sending
                 return mic
         except MicStuck:
             self._audio_stuck()
@@ -4194,10 +4258,54 @@ class App:
                 self._close_mic()
         raise RuntimeError(f"{name} isn't sending any audio")
 
+    def _bridge_mic(self):
+        """(mic, name) to record on while a Bluetooth headset wakes up, or None.
+        Waking a headset (switching it into call mode) takes about 2 s before it sends
+        any audio; the laptop's own mic is ready in under 0.1 s."""
+        # no mics.lock: it's held for seconds while a headset is being (re)opened
+        index, name = self.mics.pick(self.cfg["mic"])
+        bad, until = self.bad_mic
+        if Mics.score(name or "") != 2 or (name == bad and time.time() < until):
+            return None
+        mic = self.mic
+        if mic and mic.device == index and mic.alive and time.time() - mic.last_audio < 0.5:
+            return None  # already awake
+        builtin = next(((i, n) for i, n in self.mics.devices if Mics.score(n) == 1), None)
+        if not builtin:
+            return None
+        try:
+            mic = open_mic(builtin[0], timeout=1.0)
+            if mic.wait_audio(0.5):
+                return mic, builtin[1]
+            mic.close()
+        except Exception as e:
+            log("Bridge mic failed:", repr(e))
+        return None
+
+    def _wake_headset(self, session, bridge):
+        """Open the headset in the background and move the recording over to it."""
+        try:
+            # Reopening a headset that's slow to wake costs 7-15 s, so while the
+            # laptop mic is recording, give it longer to start sending first.
+            mic = self._ready_mic(patience=5.0)
+            if session.switch_mic(mic):
+                log(f"Switched to {self.mic_name} after {time.time() - session.started:.1f}s")
+        except Exception as e:
+            log("Headset didn't wake; recording stays on the laptop mic:", repr(e))
+            session.stopping.wait()
+        bridge.close()
+
     def _open_session(self):
         try:
-            mic = self._ready_mic()
-            session = Session(self.engine, lambda lv: self.ui.put(("level", lv)), mic)
+            bridge = self._bridge_mic()
+            if bridge:
+                mic, name = bridge
+                session = Session(self.engine, lambda lv: self.ui.put(("level", lv)), mic)
+                log(f"Recording on {name} while the headset wakes up")
+                threading.Thread(target=self._wake_headset, args=(session, mic), daemon=True).start()
+            else:
+                mic = self._ready_mic()
+                session = Session(self.engine, lambda lv: self.ui.put(("level", lv)), mic)
             session.late_start = time.time() - self.press_time > 0.6
         except Exception as e:
             log("Microphone error:", repr(e))

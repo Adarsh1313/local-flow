@@ -45,12 +45,42 @@ nothing burns CPU during dictation.
 | Popup / settings opened | fades in and rises `--rise-distance` | `--duration-enter` |
 | "Copy" clicked | label becomes a green check + "Copied", then back | `--duration-confirm` |
 | Recording | waveform + pulsing dot (unchanged: live state) | — |
+| Command listening | waveform in ice blue, no red dot (live state) | `--color-command` |
+| Command thinking (AI fallback only) | one ice-blue dot breathes slowly | `--duration-breathe` |
+| Command result | card slides down `--rise-distance` from under the pill + fades in | `--duration-enter` |
+| Command card leaves | fades out, rising back toward the pill | `--duration-exit` |
 
 When Windows' "Animation effects" is off (Settings › Accessibility › Visual
 effects), every duration is 0: things jump to their end state.
 
 Not animated: page content when switching settings tabs (it just swaps, fast),
 scrolling, text, anything during dictation except the pill.
+
+## Command mode ("Hey Jarvis")
+A new state of the pill, not a new system: same colours, type and radii. It brings
+back the "Hey Cortana" feeling: say it, see it happen, no chat window.
+
+1. **Wake word heard:** existing chime. The pill shows the waveform in
+   `--color-command` (ice blue) with no red dot, so it reads as "command", not
+   "dictation". No card yet.
+2. **Thinking** (only when the local AI fallback runs, 1–3 s): the waveform settles
+   into one ice-blue dot breathing at `--duration-breathe`. Never a spinner.
+3. **Result card** drops below the pill: `--color-surface`, `--radius-card`, lit top
+   edge, `--shadow-float` (the card floats, so it joins the pill and hover bar as the
+   only shadowed things). Width fits its text, `--command-card-min` to `--command-card-max`.
+   - Left: the app's real icon at `--size-command-icon` (from its shortcut/exe).
+     No app (folder, setting, volume, media): a Segoe Fluent glyph centred in a
+     `--size-command-icon` square, `--color-control` fill, `--radius-control`.
+   - Right, two lines: verb in caption, muted ("Opening", "Paused", "Volume");
+     object in display semibold `--text-command` ("Spotify", "Downloads", "30%").
+4. **No match:** neutral glyph (E9CE, "unknown") + "No app called" / heard word
+   ("Spotfy"). Nothing is pasted. Text never turns red: a miss isn't an error.
+5. **Timing:** card holds `--duration-command-hold` on success,
+   `--duration-command-miss` on no match, and stays while the pointer is over it.
+6. **Sound:** wake chime, then a soft tick on success and a low tone on no match.
+
+Copy rules: verb + object only. "Opening Spotify", never "Sure! Opening Spotify for
+you". No ellipses on finished actions.
 
 ## Component conventions
 - One primary (white) button per view at most ("Add", "Paste" on a card).
@@ -80,6 +110,10 @@ scrolling, text, anything during dictation except the pill.
 - Side-tab border as the selected state: selection is a filled capsule.
 - Drop shadows on everything: only the floating pill and hover bar get one.
 - Bouncy springs: motion overshoots never; it eases out and lands.
+- Siri's rainbow glow or any gradient edge around the screen or pill.
+- Cortana branding: no ring logo, no blue circle, no "Cortana" name. The nostalgia
+  is in the behaviour, not the look.
+- Chatbot replies: no speech bubbles, no "How can I help?", no typing dots.
 
 ## Anti-slop watchlist for this direction
 - Near-black + one accent is a known default: the guard is that white, not the
@@ -88,6 +122,9 @@ scrolling, text, anything during dictation except the pill.
 - Don't animate for its own sake: if a motion isn't in the table above, it needs a reason.
 
 ## Open questions / extend here
+- Command card position when the pill sits near the top of the screen: card above
+  instead of below? Decide when building.
+- Sounds for success / no match: pick or make the two tones (short, quiet, no melody).
 - Light theme: not planned; follow up if Windows is switched to light mode.
 - Real acrylic behind popups: tested Oct 2026. The official DWM backdrop works but
   washes out to pale grey, and any colour tk paints over it turns translucent (cards

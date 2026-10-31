@@ -66,7 +66,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageTk
 import commands
 import textfx
 import winactions
-from textfx import join_pieces, zipf
+from textfx import zipf
 
 SR = 16000
 FRAME = 800  # 50 ms analysis frames
@@ -721,7 +721,9 @@ class Session:
         else:
             self._commit(a[self.committed:], speech_threshold(frame_rms(a)))
         save_wav(LAST_AUDIO_PATH, a)
-        return join_pieces(self.parts)
+        # every part after the first was cut at a pause of at least PAUSE seconds
+        self.transcript = textfx.Transcript(tuple(self.parts), (0.0,) + (self.PAUSE,) * (len(self.parts) - 1))
+        return self.transcript.text
 
     def cancel(self):
         self._close()
@@ -4238,12 +4240,13 @@ class App:
                 return
             if (handsfree_turn or nowhere_to_type) and self.cfg["commands_enabled"] and text                     and self._run_command(text):
                 return
+            said = getattr(session, "transcript", text)
             if self.cfg["llm_cleanup"] and text:
                 try:
-                    text = llm_cleanup(text, self.cfg)
+                    said = llm_cleanup(text, self.cfg)
                 except Exception as e:
                     log("Cleanup skipped:", repr(e))
-            text = textfx.postprocess(text, textfx.Options.from_cfg(self.cfg), [self.dictionary])
+            text = textfx.postprocess(said, textfx.Options.from_cfg(self.cfg), [self.dictionary])
             log(f"[{session.duration:.1f}s audio, {asr_time:.2f}s asr, "
                 f"{time.time() - t:.2f}s total] {text!r}")
             if not text:

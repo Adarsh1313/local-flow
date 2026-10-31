@@ -1,5 +1,5 @@
 """Turning a raw transcript into the text that gets pasted."""
-from textfx import Options, postprocess
+from textfx import Options, Transcript, postprocess
 
 PLAIN = Options(numbers=False)
 
@@ -97,3 +97,36 @@ def test_numbers_switched_off():
 def test_numbers_inside_a_list_are_not_list_markers():
     assert postprocess("One, buy twenty apples. Two, call the bank.") == \
         "1. Buy 20 apples\n2. Call the bank"
+
+
+# -- spoken lists
+
+def test_spoken_numbers_without_punctuation_make_a_list():
+    assert postprocess("One buy milk two call the bank three pay rent") == \
+        "1. Buy milk\n2. Call the bank\n3. Pay rent"
+
+
+def test_counting_without_punctuation_stays_a_sentence():
+    for text in ("I have one question and two concerns.",
+                 "One thing I learned is that two heads are better than one."):
+        assert postprocess(text) == text
+
+
+def test_then_after_a_pause_continues_an_open_list():
+    said = Transcript(("One, buy milk. Two, call the bank.", "Then pay the rent."), (0.0, 0.8))
+    assert postprocess(said) == "1. Buy milk\n2. Call the bank\n3. Pay the rent"
+
+
+def test_then_without_a_pause_stays_in_the_point():
+    said = Transcript(("One, buy milk. Two, call the bank and then pay the rent.",), (0.0,))
+    assert postprocess(said) == "1. Buy milk\n2. Call the bank and then pay the rent"
+
+
+def test_then_after_a_pause_with_no_list_stays_prose():
+    said = Transcript(("I finished work.", "Then I went home."), (0.0, 0.8))
+    assert postprocess(said) == "I finished work. Then I went home."
+
+
+def test_pause_split_parts_join_into_one_sentence():
+    said = Transcript(("I think we should.", "go to the park."), (0.0, 0.8))
+    assert postprocess(said) == "I think we should go to the park."

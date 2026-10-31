@@ -27,8 +27,14 @@ def zipf(text):
 
 
 def join_pieces(pieces):
-    out = ""
+    return join_parts(pieces)[0]
+
+
+def join_parts(pieces):
+    """The joined text, and where each piece starts in it (None for a dropped piece)."""
+    out, starts = "", []
     for piece in (p.strip() for p in pieces):
+        starts.append(None)
         if not piece:
             continue
         words = [w.strip(".,!?").lower() for w in piece.split()]
@@ -36,6 +42,7 @@ def join_pieces(pieces):
             continue  # a lone "Uh" between phrases
         if not out:
             out = piece
+            starts[-1] = 0
             continue
         first = piece.split()[0]
         bare = first.strip(".,!?;:\"'")
@@ -48,15 +55,24 @@ def join_pieces(pieces):
                 piece = bare.lower() + piece[len(bare):]
         elif out[-1:] not in ".?!" and common:
             piece = bare.lower() + piece[len(bare):]
-        out += " " + piece
-    return out
+        out += ("" if out.endswith("\n") else " ")
+        starts[-1] = len(out)
+        out += piece
+    return out, starts
+
+
+def strip_fillers(text):
+    text = re.sub(r"(?i)(^|[\s,(])(?:uh+|um+|uhm|erm|hmm+)\b[,.]?(?=\s|$)", r"\1", text)
+    return re.sub(r"[ \t]{2,}", " ", text).replace(" ,", ",").strip(" ,")
+
+
+def capitalise_sentences(text):
+    # sentences that now start lower-case ("Uh what should I do" -> "What should I do")
+    return re.sub(r"(^|[.!?]\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
 
 
 def remove_fillers(text):
-    text = re.sub(r"(?i)(^|[\s,(])(?:uh+|um+|uhm|erm|hmm+)\b[,.]?(?=\s|$)", r"\1", text)
-    text = re.sub(r"\s{2,}", " ", text).replace(" ,", ",").strip(" ,")
-    # sentences that now start lower-case ("Uh what should I do" -> "What should I do")
-    return re.sub(r"(^|[.!?]\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
+    return capitalise_sentences(strip_fillers(text))
 
 
 # ------------------------------------------------------------- spoken lists
@@ -65,9 +81,11 @@ def remove_fillers(text):
 #   Here's my plan:
 #   1. Buy milk
 #   2. Call the bank
-# A run of at least two consecutive markers is needed (1 then 2), and a bare
-# "one"/"first" only counts at the start of a sentence, so "I have one question
-# and two concerns" stays a sentence. "Bullet point" / "next point" make "-" bullets.
+# A run of at least two consecutive markers is needed (1 then 2). Numbers work
+# without punctuation too ("one buy milk two call the bank"), unless they count
+# something: "I have one question and two concerns" stays a sentence.
+# "Bullet point" / "next point" make "-" bullets. Once a list is open, "then" said
+# after a pause adds a point.
 #
 # Spoken sequences work too: "First, open the app. Then sign in. Finally, check
 # the logs." becomes a numbered list. These need a "first" to start and at least
@@ -93,8 +111,28 @@ LIST_MARKER = re.compile(
     rf"(?P<pword>{_ALT(NUM_WORDS)}|\d{{1,2}})\b[,.:]?\s*"
     r"|\b(?P<bullet>bullet point|bullet|next point|next bullet|new point|another point)\b[,.:]?\s*"
     # "1. alpha 2. beta": the recogniser often leaves out the full stop before a digit
-    r"|(?<=\s)(?P<idigit>\d{1,2})[.)]\s+(?=[^\W\d_])",
+    r"|(?<=\s)(?P<idigit>\d{1,2})[.)]\s+(?=[^\W\d_])"
+    # "one buy milk two call the bank": no punctuation at all (checked by _counts_a_noun)
+    rf"|(?<![\w'-])(?P<bword>{_ALT(NUM_WORDS)})\s+(?=[^\W\d_])",
     re.I)
+# "then" at the start of a phrase said after a pause
+_PAUSED_THEN = re.compile(r"(?:and\s+)?then\b[,:]?\s+", re.I)
+# a bare number that counts something ("one question and two concerns") isn't a marker
+_COUNTED_BY = {"a", "an", "the", "no", "only", "which", "each", "any", "every", "this", "that", "per",
+               "of", "those", "these", "just", "another", "than", "to", "at", "by", "for", "with"}
+_COUNTS = {"of", "or", "more", "times", "hundred", "thousand", "million", "billion", "and"}
+_NOT_PLURAL = {"is", "was", "has", "does", "goes", "says", "this", "thus", "its", "yes", "plus", "us",
+               "bus", "as", "his", "hers", "ours", "yours", "always", "perhaps", "unless", "across"}
+
+
+def _counts_a_noun(text, start, end):
+    before = re.search(r"([A-Za-z'-]+)\W*$", text[:start])
+    after = re.match(r"([A-Za-z'-]+)", text[end:])
+    nxt = after.group(1).lower() if after else ""
+    if before and before.group(1).lower() in _COUNTED_BY:
+        return True
+    plural = len(nxt) > 3 and nxt.endswith("s") and not nxt.endswith("ss") and nxt not in _NOT_PLURAL
+    return plural or nxt in _COUNTS
 # "Point one is speed" -> "Speed"
 _LABEL_VERB = re.compile(r"^(?:is|are|was|will\s+be|would\s+be)\s+(?:that\s+)?", re.I)
 
@@ -115,28 +153,39 @@ def _longest_run(marks, follows):
     return run
 
 
-def format_lists(text):
+def format_lists(text, pauses=()):
+    """`pauses`: where in the text a phrase said after a pause starts. "Then" there
+    adds a point to a list that's already open."""
     marks = []
     for m in LIST_MARKER.finditer(text):
         g = m.groupdict()
+        if g["bword"] and _counts_a_noun(text, m.start(), m.end()):
+            continue
         if g["bullet"]:
             kind, value = "bullet", None
         elif g["seq"] or g["last"]:
             kind, value = "seq" if g["seq"] else "last", None
         else:
-            raw = re.sub(r"\s+", " ", g["digit"] or g["word"] or g["ord"] or g["pword"] or g["idigit"]).lower()
+            raw = re.sub(r"\s+", " ", g["digit"] or g["word"] or g["ord"] or g["pword"] or g["idigit"]
+                         or g["bword"]).lower()
             kind, value = "num", int(raw) if raw.isdigit() else NUM_WORDS.get(raw) or ORDINALS.get(raw)
         marks.append((m.start() + len(g["pre"] or ""), m.end(), kind, value, bool(g["pword"])))
+    for at in pauses:
+        m = _PAUSED_THEN.match(text, at)
+        if m:
+            marks = [mk for mk in marks if mk[0] != at] + [(at, m.end(), "then", None, False)]
+    marks.sort()
 
     run = _longest_run(marks, lambda mk, want: mk[2] == "num" and mk[3] == want)
     numbered = len(run) >= 2
     if not numbered:
-        run = _longest_run(marks, lambda mk, want: mk[2] in ("seq", "last"))
+        run = _longest_run(marks, lambda mk, want: mk[2] in ("seq", "last", "then"))
         numbered = len(run) >= 3
     if not numbered:
         run = [mk for mk in marks if mk[2] == "bullet"]
         if len(run) < 2:
             return text
+    run = run + [mk for mk in marks if mk[2] == "then" and mk[0] > run[-1][0] and mk not in run]
 
     items = []
     for j, mark in enumerate(run):
@@ -218,19 +267,45 @@ class Options:
                    replacements=tuple(cfg.get("replacements", {}).items()))
 
 
-def postprocess(text, options=Options(), swaps=()):
-    """Raw transcript -> pasted text. `swaps` apply in order (your Dictionary first)."""
+LIST_PAUSE = 0.6   # seconds of quiet before "then" that start a new point
+
+
+@dataclass(frozen=True)
+class Transcript:
+    """What was said, as the phrases between pauses."""
+    parts: tuple
+    gaps: tuple = ()   # seconds of quiet before each part
+
+    @property
+    def text(self):
+        return join_pieces(self.parts)
+
+
+def _clean(part, options, swaps):
     if options.fillers:
-        text = remove_fillers(text)
+        part = strip_fillers(part)
     for source in swaps:
-        text = source.apply(text)
+        part = source.apply(part)
     for heard, wanted in options.replacements:
-        text = re.sub(r"\b" + re.escape(heard) + r"\b", wanted, text, flags=re.I)
+        part = re.sub(r"\b" + re.escape(heard) + r"\b", wanted, part, flags=re.I)
     if options.voice_commands:
-        text = re.sub(r"[,.]?\s*\bnew paragraph\b[,.]?\s*", "\n\n", text, flags=re.I)
-        text = re.sub(r"[,.]?\s*\bnew line\b[,.]?\s*", "\n", text, flags=re.I)
+        part = re.sub(r"[,.]?\s*\bnew paragraph\b[,.]?\s*", "\n\n", part, flags=re.I)
+        part = re.sub(r"[,.]?\s*\bnew line\b[,.]?\s*", "\n", part, flags=re.I)
     if options.numbers:
-        text = numbers_to_digits(text)
+        part = numbers_to_digits(part)
+    return part
+
+
+def postprocess(said, options=Options(), swaps=()):
+    """Raw transcript (a Transcript or plain text) -> pasted text. `swaps` apply in
+    order (your Dictionary first)."""
+    if isinstance(said, str):
+        said = Transcript((said,))
+    gaps = said.gaps or (0.0,) * len(said.parts)
+    text, starts = join_parts([_clean(p, options, swaps) for p in said.parts])
+    if options.fillers:
+        text = capitalise_sentences(text)
     if options.lists:
-        text = format_lists(text)
+        pauses = [at for at, gap in zip(starts, gaps) if at and gap >= LIST_PAUSE]
+        text = format_lists(text, pauses)
     return text.strip()

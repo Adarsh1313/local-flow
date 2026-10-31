@@ -266,9 +266,19 @@ After daily use of LocalFlow, a handful of rough edges make it feel worse than W
   - All swaps run in one regex pass, so swapped-in words aren't swapped again.
 - **Fix card:** reuses the Command card, with the dictionary glyph. A Learned outcome
   uses kind `done`; Waiting or Refused use `no_match` (longer hold). No sound.
-- **Next session, slice 7:** consider two windows: a per-pixel-alpha
-  (`UpdateLayeredWindow`) backdrop for the rounded shape and shadow, under the
-  existing tk content window, kept inside the straight part of the capsule.
+- **Slice 7, corners:**
+  - The square pill couldn't be reproduced here: the live pill's colour key was
+    intact, and test windows stayed rounded.
+  - Built anyway, as a single-window design rather than the two-window idea. Each
+    floating surface (pill, hover bar, Command card, window-title tip) is a `Layer`:
+    the existing draw code paints into an RGBA image through the few `tk.Canvas`
+    calls it uses, and `UpdateLayeredWindow` shows it with per-pixel alpha.
+  - No colour key is left, so nothing can show as a dark box. Text is drawn by PIL
+    with the same Segoe UI Variable instances.
+  - A Layer only re-renders when its drawing changes; moving or fading only
+    repositions it. About 1.4 ms per frame while the pill animates, nothing while idle.
+  - Mouse events on the hover bar and card are not verified automatically: tk
+    follows the real pointer.
 
 ## Progress
 
@@ -278,7 +288,7 @@ After daily use of LocalFlow, a handful of rough edges make it feel worse than W
 - [x] 4. Move `Dictionary` into a pure module with learn outcomes and the new rules; re-check `off` entries
 - [x] 5. Fix feedback card, and "Not applied" on the Dictionary page
 - [x] 6. Starter words module, five groups, group switches on the Dictionary page
-- [ ] 7. Real-transparency rendering for the pill, hover bar and Command card
+- [x] 7. Real-transparency rendering for the pill, hover bar and Command card
 - [x] 8. `WakeDetector` with openWakeWord "hey jarvis", fallback, sensitivity and wake-word mic picker
 - [x] 9. Training recordings: size display, "Delete all", clips module and test
 - [x] 10. Hotword boosting spike with sherpa-onnx; record the result (not adopted: see research note)

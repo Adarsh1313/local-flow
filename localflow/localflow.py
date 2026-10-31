@@ -934,7 +934,6 @@ T = {
     "success": "#8fd3a6", "stat1": "#9cc3e6", "stat2": "#d9bb85", "stat3": "#8fd3a6",
     "popup_border": "#2a2a2f", "idle_pill": "#4a4a50", "selection": "#2f4a63",
 }
-KEY = "#010203"  # transparent colour key for the pill and the hover bar
 SPACE = {1: 4, 2: 8, 3: 12, 4: 16, 5: 20, 6: 24}
 RADIUS = {"chip": 6, "control": 8, "card": 12}
 MOTION = {"hover": 120, "move": 200, "enter": 220, "confirm": 1400, "rise": 8,
@@ -1107,10 +1106,17 @@ def _shape(w, h, r, fill, outline, width, edge):
     return im
 
 
+def photo(im):
+    """A PhotoImage that keeps its PIL image, so a Layer can draw it too."""
+    ph = ImageTk.PhotoImage(im)
+    ph.pil = im
+    return ph
+
+
 @functools.lru_cache(maxsize=400)
 def shape(w, h, r, fill, outline="", width=1, edge=""):
     """Rounded rectangle (or capsule/circle when r >= h/2) as a PhotoImage."""
-    return ImageTk.PhotoImage(_shape(max(1, int(w)), max(1, int(h)), r, fill, outline, width, edge))
+    return photo(_shape(max(1, int(w)), max(1, int(h)), r, fill, outline, width, edge))
 
 
 ICON_FILES = [os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", f)
@@ -1135,7 +1141,7 @@ def glyph(ch, pt, color):
     mask = Image.new("L", (size, size), 0)
     ImageDraw.Draw(mask).text((size / 2, size / 2), ch, font=font, fill=255, anchor="mm")
     im.putalpha(mask)
-    return ImageTk.PhotoImage(im)
+    return photo(im)
 
 
 def icon(c, x, y, ch, color, pt=11):
@@ -1228,6 +1234,238 @@ def pill(c, x0, y0, x1, y1, fill, outline="", edge=""):
 def dot(c, cx, cy, r, fill):
     d = max(2, round(2 * r))
     return put(c, cx - d / 2, cy - d / 2, shape(d, d, d / 2, fill))
+
+
+# ------------------------------------------------- floating windows (real alpha)
+#
+# The pill, hover bar and Command card float over other apps. A colour-key window
+# (one colour made see-through) leaves dark, jagged edges, and Windows can stop
+# honouring the key (full-screen apps), which shows the whole window as a dark
+# rectangle. A Layer is drawn as one RGBA image and shown with UpdateLayeredWindow,
+# so every pixel has its own transparency and the edges blend with what's behind.
+# It offers the few tk.Canvas calls those surfaces use, so their drawing code is
+# unchanged. It only redraws when what it shows changes: nothing runs while idle.
+
+class _BLEND(ctypes.Structure):
+    _fields_ = [("op", ctypes.c_byte), ("flags", ctypes.c_byte), ("alpha", ctypes.c_ubyte), ("fmt", ctypes.c_byte)]
+
+
+class _BMI(ctypes.Structure):
+    _fields_ = [("size", ctypes.wintypes.DWORD), ("w", ctypes.c_long), ("h", ctypes.c_long),
+                ("planes", ctypes.wintypes.WORD), ("bits", ctypes.wintypes.WORD), ("comp", ctypes.wintypes.DWORD),
+                ("img", ctypes.wintypes.DWORD), ("xp", ctypes.c_long), ("yp", ctypes.c_long),
+                ("used", ctypes.wintypes.DWORD), ("imp", ctypes.wintypes.DWORD)]
+
+
+_gdi = ctypes.windll.gdi32
+_gdi.CreateCompatibleDC.restype = ctypes.c_void_p
+_gdi.CreateCompatibleDC.argtypes = [ctypes.c_void_p]
+_gdi.CreateDIBSection.restype = ctypes.c_void_p
+_gdi.CreateDIBSection.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p,
+                                  ctypes.c_void_p, ctypes.wintypes.DWORD]
+_gdi.SelectObject.restype = ctypes.c_void_p
+_gdi.SelectObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+_gdi.DeleteObject.argtypes = [ctypes.c_void_p]
+_gdi.DeleteDC.argtypes = [ctypes.c_void_p]
+user32.GetDC.restype = ctypes.c_void_p
+user32.ReleaseDC.argtypes = [ctypes.wintypes.HWND, ctypes.c_void_p]
+user32.UpdateLayeredWindow.argtypes = [
+    ctypes.wintypes.HWND, ctypes.c_void_p, ctypes.POINTER(ctypes.wintypes.POINT),
+    ctypes.POINTER(ctypes.wintypes.SIZE), ctypes.c_void_p, ctypes.POINTER(ctypes.wintypes.POINT),
+    ctypes.wintypes.DWORD, ctypes.POINTER(_BLEND), ctypes.wintypes.DWORD]
+
+FONT_FILES = {"Segoe UI Variable": "SegUIVar.ttf", "Segoe UI Semibold": "seguisb.ttf", "Segoe UI": "segoeui.ttf"}
+
+
+@functools.lru_cache(maxsize=32)
+def pil_font(font):
+    """A tk font tuple (family, points) as a PIL font of the same size and weight."""
+    family, pt = font[0], font[1]
+    size = max(1, round(pt * S * 96 / 72))
+    fonts = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+    if family in ("Segoe Fluent Icons", "Segoe MDL2 Assets"):
+        return _icon_font(size)
+    if family.startswith("Segoe UI Variable"):
+        style = family[len("Segoe UI Variable"):].strip().replace("Semib", "Semibold").replace("Semiboldold", "Semibold")
+        try:
+            f = ImageFont.truetype(os.path.join(fonts, FONT_FILES["Segoe UI Variable"]), size)
+            names = [n.decode() if isinstance(n, bytes) else n for n in f.get_variation_names()]
+            want = next((n for n in names if n.lower() == style.lower()), None) or \
+                next((n for n in names if n.lower().startswith(style.split()[0].lower())), None)
+            if want:
+                f.set_variation_by_name(want)
+            return f
+        except Exception:
+            pass
+    name = FONT_FILES.get(family, FONT_FILES["Segoe UI"])
+    try:
+        return ImageFont.truetype(os.path.join(fonts, name), size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+_TEXT_ANCHOR = {"w": "lm", "e": "rm", "center": "mm", "n": "mt", "s": "mb", "nw": "lt", "ne": "rt",
+                "sw": "lb", "se": "rb"}
+
+
+def render_ops(ops, w, h):
+    """What a Layer shows, as an RGBA image (transparent where nothing is drawn)."""
+    im = Image.new("RGBA", (max(1, int(w)), max(1, int(h))), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(im)
+    for op in ops:
+        kind = op[0]
+        if kind == "image":
+            _, src, x, y, anchor = op
+            sw, sh = src.size
+            if anchor == "center":
+                x, y = x - sw / 2, y - sh / 2
+            x, y = round(x), round(y)
+            sx, sy = max(0, -x), max(0, -y)   # clip to the window
+            ex, ey = min(sw, im.width - x), min(sh, im.height - y)
+            if ex > sx and ey > sy:
+                im.alpha_composite(src, (x + sx, y + sy), (sx, sy, ex, ey))
+        elif kind == "rect":
+            _, x0, y0, x1, y1, fill = op
+            if fill:
+                draw.rectangle((round(x0), round(y0), round(x1) - 1, round(y1) - 1), fill=fill)
+        elif kind == "line":
+            _, x0, y0, x1, y1, fill, width = op
+            draw.line((x0, y0, x1, y1), fill=fill, width=max(1, int(width)))
+        elif kind == "text":
+            _, x, y, text, fill, font, anchor = op
+            src, (dx, dy) = _text_image(text, fill, font, _TEXT_ANCHOR.get(anchor, "mm"))
+            x, y = round(x + dx), round(y + dy)
+            sw, sh = src.size
+            sx, sy = max(0, -x), max(0, -y)
+            ex, ey = min(sw, im.width - x), min(sh, im.height - y)
+            if ex > sx and ey > sy:
+                im.alpha_composite(src, (x + sx, y + sy), (sx, sy, ex, ey))
+    return im
+
+
+@functools.lru_cache(maxsize=256)
+def text_width(font, text):
+    return tkfont.Font(font=font).measure(text)
+
+
+@functools.lru_cache(maxsize=128)
+def _text_image(text, fill, font, anchor):
+    """A line of text as RGBA, and where its top-left sits relative to the anchor point."""
+    f = pil_font(font)
+    x0, y0, x1, y1 = f.getbbox(text, anchor=anchor)
+    im = Image.new("RGBA", (max(1, x1 - x0), max(1, y1 - y0)), (0, 0, 0, 0))
+    ImageDraw.Draw(im).text((-x0, -y0), text, fill=fill, font=f, anchor=anchor)
+    return im, (x0, y0)
+
+
+class Layer:
+    """A floating window shown as one RGBA image with real per-pixel transparency.
+    Draw on it with the tk.Canvas calls below, then present() it at a screen spot."""
+
+    def __init__(self, root, clickable=False):
+        self.win = tk.Toplevel(root)
+        self.win.overrideredirect(True)
+        self.win.attributes("-topmost", True)
+        self.win.geometry("1x1+-20000+-20000")
+        self.win.update_idletasks()
+        set_ex_style(self.win, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED
+                     | (0 if clickable else WS_EX_TRANSPARENT))
+        self.ops, self.w, self.h = [], 1, 1
+        self.hwnd = hwnd_of(self.win)
+        self.shown = None          # (ops, size, x, y, alpha) last put on screen
+        self._imgs = []
+
+    # -- the tk.Canvas calls the floating surfaces use
+    def config(self, width=None, height=None, cursor=None, **_):
+        if width is not None:
+            self.w = int(width)
+        if height is not None:
+            self.h = int(height)
+        if cursor is not None:
+            self.win.config(cursor=cursor)
+
+    configure = config
+
+    def delete(self, tag="all"):
+        self.ops = []
+
+    def create_image(self, x, y, image=None, anchor="nw", tags=()):
+        self.ops.append(("image", image.pil, x, y, anchor))
+
+    def create_text(self, x, y, text="", fill="", font=None, anchor="center", **_):
+        self.ops.append(("text", x, y, text, fill, font, anchor))
+
+    def create_rectangle(self, x0, y0, x1, y1, fill="", outline="", **_):
+        self.ops.append(("rect", x0, y0, x1, y1, fill))
+
+    def create_line(self, x0, y0, x1, y1, fill="", width=1, **_):
+        self.ops.append(("line", x0, y0, x1, y1, fill, width))
+
+    def bind(self, seq, fn):
+        self.win.bind(seq, fn)
+
+    def unbind(self, seq):
+        self.win.unbind(seq)
+
+    def after(self, ms, fn):
+        return self.win.after(ms, fn)
+
+    def after_idle(self, fn):
+        return self.win.after_idle(fn)
+
+    def after_cancel(self, job):
+        self.win.after_cancel(job)
+
+    # -- on screen
+    def present(self, x, y, alpha=1.0):
+        """Show what was drawn with its top-left at (x, y) on screen."""
+        state = (tuple((op[0], id(op[1])) + op[2:] if op[0] == "image" else op for op in self.ops),
+                 self.w, self.h, round(x), round(y), round(alpha * 255))
+        if state == self.shown:
+            return
+        geometry = f"{self.w}x{self.h}+{round(x)}+{round(y)}"
+        if geometry != getattr(self, "geometry", None):   # tk finds the widget under the mouse from this
+            self.win.geometry(geometry)
+            self.geometry = geometry
+        if self.shown and state[:3] == self.shown[:3]:
+            self._update(None, round(x), round(y), round(alpha * 255))   # moved or faded only
+        else:
+            self._update(render_ops(self.ops, self.w, self.h), round(x), round(y), round(alpha * 255))
+        self.shown = state
+
+    def park(self):
+        self.present(-20000, -20000, 0)
+
+    def _update(self, im, x, y, alpha):
+        hwnd = self.hwnd
+        pos = ctypes.wintypes.POINT(x, y)
+        blend = _BLEND(0, 0, max(0, min(255, alpha)), 1)   # AC_SRC_OVER, AC_SRC_ALPHA
+        if im is None:
+            user32.UpdateLayeredWindow(hwnd, None, ctypes.byref(pos), None, None, None, 0,
+                                       ctypes.byref(blend), 2)   # ULW_ALPHA
+            return
+        data = im.convert("RGBa").tobytes("raw", "BGRa")   # premultiplied, in Windows' byte order
+        w, h = im.size
+        if getattr(self, "_dib", None) is None or self._dib[0] != (w, h):
+            self._free()
+            mem = _gdi.CreateCompatibleDC(None)
+            bits = ctypes.c_void_p()
+            bmi = _BMI(ctypes.sizeof(_BMI), w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
+            bmp = _gdi.CreateDIBSection(mem, ctypes.byref(bmi), 0, ctypes.byref(bits), None, 0)
+            old = _gdi.SelectObject(mem, bmp)
+            self._dib = ((w, h), mem, bmp, old, bits)   # kept between frames of the same size
+        _, mem, _, _, bits = self._dib
+        ctypes.memmove(bits, data, w * h * 4)
+        user32.UpdateLayeredWindow(hwnd, None, ctypes.byref(pos), ctypes.byref(ctypes.wintypes.SIZE(w, h)),
+                                   mem, ctypes.byref(ctypes.wintypes.POINT(0, 0)), 0, ctypes.byref(blend), 2)
+
+    def _free(self):
+        if getattr(self, "_dib", None):
+            _, mem, bmp, old, _ = self._dib
+            _gdi.SelectObject(mem, old)
+            _gdi.DeleteObject(bmp)
+            _gdi.DeleteDC(mem)
+            self._dib = None
 
 
 # --------------------------------------------------------------------- widgets
@@ -1650,19 +1888,14 @@ class Overlay:
         self.command_mode = False  # a hands-free turn that may be a Command: ice-blue wave
         self.finish_hint = None
         self.scale = S
-        self.win = tk.Toplevel(root)
-        self.win.overrideredirect(True)
-        self.win.attributes("-topmost", True, "-transparentcolor", KEY, "-alpha", FLOAT_ALPHA)
         w, h = px(self.W), px(self.H)
-        self.canvas = tk.Canvas(self.win, width=w, height=h, bg=KEY, highlightthickness=0)
-        self.canvas.pack()
+        self.canvas = Layer(root)   # clicks pass through to the app below
+        self.canvas.config(width=w, height=h)
+        self.win = self.canvas.win
         rect = work_area()
         self.x = rect.left + (rect.right - rect.left - w) // 2
         self.y = rect.bottom - h - px(12)
         self.w, self.h = w, h
-        self.win.geometry(f"{w}x{h}+{self.x}+{self.y}")
-        self.win.update_idletasks()
-        set_ex_style(self.win, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT | WS_EX_LAYERED)
         self.state, self.text, self.until = "idle", "", 0
         self.levels = deque([0.0] * 28, maxlen=28)
         self.tick = 0
@@ -1696,6 +1929,10 @@ class Overlay:
         dot(self.canvas, x, cy, px(4 + 1.5 * np.sin(self.tick / 4)), T["recording"])
 
     def draw(self):
+        self._draw()
+        self.canvas.present(self.x, self.y, FLOAT_ALPHA)
+
+    def _draw(self):
         self.tick += 1
         if self.until and time.time() > self.until:
             self.set("idle")
@@ -1719,7 +1956,7 @@ class Overlay:
 
         if self.state == "handsfree":
             hint = f"{self.finish_hint or self.key_text + ' to finish'} · Esc to cancel"
-            tw = tkfont.Font(font=F["caption"]).measure(hint)
+            tw = text_width(F["caption"], hint)
             x0, y0, x1, y1 = self._pill(px(200) + tw + px(14), px(40))
             cy = (y0 + y1) / 2
             if self.command_mode:  # --color-command, no red dot: this isn't (yet) dictation
@@ -1739,7 +1976,7 @@ class Overlay:
             return
 
         # "message" / "error": text pill sized to its text
-        tw = tkfont.Font(font=F["body"]).measure(self.text)
+        tw = text_width(F["body"], self.text)
         width = min(px(self.W) - px(8), tw + px(44))
         x0, y0, x1, y1 = self._pill(width, px(40))
         mark = T["danger"] if self.state == "error" else T["accent"]
@@ -1764,14 +2001,9 @@ class HoverBar:
         self.w, self.h = px(self.W), px(self.H)
         self.x = ov.x + ov.w // 2 - self.w // 2
         self.y = ov.y + ov.h - self.h
-        self.win = tk.Toplevel(app.root)
-        self.win.overrideredirect(True)
-        self.win.attributes("-topmost", True, "-transparentcolor", KEY)
-        self.canvas = tk.Canvas(self.win, width=self.w, height=self.h, bg=KEY, highlightthickness=0)
-        self.canvas.pack()
-        self.win.geometry(f"{self.w}x{self.h}+-20000+-20000")
-        self.win.update_idletasks()
-        set_ex_style(self.win, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+        self.canvas = Layer(app.root, clickable=True)
+        self.canvas.config(width=self.w, height=self.h)
+        self.win = self.canvas.win
         self.visible = False
         self.hot = None
 
@@ -1855,6 +2087,13 @@ class HoverBar:
             self.app.picker.show()
 
     def draw(self):
+        self._draw()
+        if self.visible or self.grow.value > 0:
+            self.canvas.present(self.x, self.y)
+        else:
+            self.canvas.park()
+
+    def _draw(self):
         c = self.canvas
         clear(c)
         g = self.grow.value
@@ -1908,8 +2147,6 @@ class HoverBar:
 
     def show(self):
         if not self.visible:
-            self.win.geometry(f"+{self.x}+{self.y}")
-            self.win.update_idletasks()
             self.visible = True
             self.hot = None
             self.dot_a.set(0)
@@ -1928,7 +2165,7 @@ class HoverBar:
 
     def _park(self):
         if not self.visible:
-            self.win.geometry("+-20000+-20000")
+            self.canvas.park()
 
 
 def above_pill_y(overlay, h):
@@ -1937,9 +2174,9 @@ def above_pill_y(overlay, h):
 
 
 def on_surface(im):
-    """An RGBA icon flattened onto the card surface (no fringe against the colour key)."""
+    """An RGBA icon flattened onto the card surface."""
     bg = Image.new("RGBA", im.size, rgb(T["surface"]) + (255,))
-    return ImageTk.PhotoImage(Image.alpha_composite(bg, im))
+    return photo(Image.alpha_composite(bg, im))
 
 
 def fit_text(text, font, width):
@@ -1961,14 +2198,8 @@ class CommandCard:
 
     def __init__(self, app):
         self.app = app
-        self.win = tk.Toplevel(app.root)
-        self.win.overrideredirect(True)
-        self.win.attributes("-topmost", True, "-transparentcolor", KEY, "-alpha", 0.0)
-        self.canvas = tk.Canvas(self.win, bg=KEY, highlightthickness=0)
-        self.canvas.pack()
-        self.win.geometry("1x1+-20000+-20000")
-        self.win.update_idletasks()
-        set_ex_style(self.win, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+        self.canvas = Layer(app.root, clickable=True)
+        self.win = self.canvas.win
         self.hovered = False
         self.canvas.bind("<Enter>", lambda e: setattr(self, "hovered", True))
         self.canvas.bind("<Leave>", lambda e: self._leave())
@@ -2020,6 +2251,7 @@ class CommandCard:
         self.y = above_pill_y(ov, self.h)
         self.hovered = False
         self.show_t.to(1, MOTION["enter"])
+        self._place(self.show_t.value)   # a card already up shows the new one at once
         self.until = time.time() + self.HOLD.get(card.kind, MOTION["command_hold"]) / 1000
         self._schedule()
 
@@ -2046,6 +2278,7 @@ class CommandCard:
         self.hovered = False
         self.until = float("inf")   # waits for an answer
         self.show_t.to(1, MOTION["enter"])
+        self._place(self.show_t.value)
         c.bind("<Motion>", self._ask_motion)
         c.bind("<Button-1>", self._ask_click)
         self._schedule()
@@ -2116,6 +2349,7 @@ class CommandCard:
         if hot != self.hot:
             self.hot = hot
             self._draw_ask()
+            self._place(self.show_t.value)
         if hit and hit[0] in ("app", "more"):
             r = next(r for r in self.regions if r[4] is hit)
             self._tip(hit, self.x + (r[0] + r[2]) // 2, self.y)   # above the card, not over its question
@@ -2134,16 +2368,10 @@ class CommandCard:
     def _tip(self, hit, cx=0, top=0):
         """Which windows an app has open (tab, folder or file name), above its icon."""
         if not hasattr(self, "tipwin"):
-            self.tipwin = tk.Toplevel(self.app.root)
-            self.tipwin.overrideredirect(True)
-            self.tipwin.attributes("-topmost", True, "-transparentcolor", KEY)
-            self.tipcanvas = tk.Canvas(self.tipwin, bg=KEY, highlightthickness=0)
-            self.tipcanvas.pack()
-            self.tipwin.geometry("1x1+-20000+-20000")
-            self.tipwin.update_idletasks()
-            set_ex_style(self.tipwin, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT)
+            self.tipcanvas = Layer(self.app.root)
+            self.tipwin = self.tipcanvas.win
         if not hit:
-            self.tipwin.geometry("+-20000+-20000")
+            self.tipcanvas.park()
             return
         kind, t, titles = hit
         head = t.name if kind == "app" else "Also closing"
@@ -2160,14 +2388,14 @@ class CommandCard:
         c.create_text(px(SPACE[3]), px(SPACE[2]) + lh / 2, text=head, fill=T["muted"], font=F["caption"], anchor="w")
         for i, line in enumerate(lines, 1):
             c.create_text(px(SPACE[3]), px(SPACE[2]) + lh * i + lh / 2, text=line, fill=T["text"], font=F["caption"], anchor="w")
-        self.tipwin.geometry(f"{w}x{h}+{cx - w // 2}+{top - h - px(SPACE[2])}")
+        self.tipcanvas.present(cx - w // 2, top - h - px(SPACE[2]))
 
     def _place(self, k):
-        rise = px(MOTION["rise"]) * (1 - k)
-        self.win.geometry(f"{self.w}x{self.h}+{self.x}+{round(self.y + rise)}")
-        self.win.attributes("-alpha", FLOAT_ALPHA * k)
         if k <= 0:
-            self.win.geometry("+-20000+-20000")
+            self.canvas.park()
+            return
+        rise = px(MOTION["rise"]) * (1 - k)
+        self.canvas.present(self.x, round(self.y + rise), FLOAT_ALPHA * k)
 
     def _schedule(self):
         if self.job:

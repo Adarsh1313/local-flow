@@ -94,10 +94,20 @@ class Context:
 OPEN_VERBS = ("open", "launch", "start", "switch to", "go to")
 MATCH_THRESHOLD = 0.85   # how close a heard name must sound to an app's name
 MAX_COMMAND_WORDS = 6    # longer than this is always Dictation
+PHONETIC_FORMS = {"claude": {"clawed", "cloud", "clod"}}
+POLITE_PREFIX = re.compile(
+    r"^\s*(?:(?:please\s+)|(?:(?:can|could|would|will)\s+you(?:\s+please)?\s+))",
+    re.IGNORECASE)
+POLITE_SUFFIX = re.compile(r"\s+(?:please|for me|thanks|thank you)[.!?,]*\s*$", re.IGNORECASE)
 
 
 def normalise(text):
     return re.sub(r"[^\w\s]", "", text.lower()).strip()
+
+
+def command_text(text):
+    """Remove conversational politeness without weakening Target matching."""
+    return POLITE_SUFFIX.sub("", POLITE_PREFIX.sub("", text.strip())).strip()
 
 
 def spoken_forms(name):
@@ -106,6 +116,7 @@ def spoken_forms(name):
     forms = {" ".join(words[i:]) for i in range(len(words))}
     if len(words) > 1:
         forms.add("".join(w[0] for w in words[:-1]) + " " + words[-1])
+    forms.update(PHONETIC_FORMS.get(" ".join(words), ()))
     return forms
 
 
@@ -205,13 +216,14 @@ GLYPH_MINIMISE, GLYPH_CLOSED, GLYPH_KEPT = "", "", ""
 
 def understand(heard, ctx):
     """What the turn asks for: an Intent, a NoMatch, or None for Dictation. Never acts."""
-    words = normalise(heard)
+    spoken = command_text(heard)
+    words = normalise(spoken)
     routine = next((r for r in ctx.routines if normalise(r.name) == words), None)
     if routine:
         return Intent("routine", routine=routine)
     m = SEARCH.match(words)
     if m and len(words.split()) <= MAX_SEARCH_WORDS:
-        query, where = heard_query(heard, m.group("q")), (m.group("where") or "web")
+        query, where = heard_query(spoken, m.group("q")), (m.group("where") or "web")
         if where in ("spotify", "youtube", "web", "the web", "google"):
             return Intent("search", find_by_name("Spotify", ctx.catalog) if where == "spotify" else None,
                           action="web" if where in ("the web", "google") else where, query=query)

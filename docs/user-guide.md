@@ -104,10 +104,11 @@ for the full pause.
 
 | Say | What happens |
 |---|---|
-| “Open Spotify” / “Switch to Chrome” | Opens it, or brings its existing window forward |
+| “Open Spotify” / “Can you open Claude?” | Opens it, or brings its existing window forward |
 | “Pause” / “Next” / “Previous” | Controls the player shown in Windows media controls |
 | “Volume 30” / “Mute” | Changes the main Windows output |
 | “Open Downloads folder” / “Open Bluetooth settings” | Opens a folder, drive or Settings page |
+| “Open LinkedIn” / “Open GitHub” | Opens common websites in the default browser |
 | “Search YouTube for lo-fi” / “Google weather” | Opens results in the appropriate app or browser |
 | “Close Spotify” / “Minimise everything” | Closes politely or clears the desktop |
 
@@ -132,6 +133,10 @@ A Routine runs several safe Commands from one phrase. The initial suggestions ar
 name and steps, or remove the Routine. Routine steps can open a Target, close an app,
 close all except chosen apps, minimise everything or control media. A Routine cannot
 run shell commands, and closing several apps still requires Confirmation.
+
+Commands can be conversational: **please**, **can you**, **could you** and **would you**
+are understood, as are endings such as **for me**. Common speech-recognition variants
+such as “clawed” or “cloud” are treated as Claude.
 
 ## Dictionary
 

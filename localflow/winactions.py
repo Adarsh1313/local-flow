@@ -26,7 +26,15 @@ SETTINGS_PAGES = {"Bluetooth": "bluetooth", "Display": "display", "Sound": "soun
                   "Notifications": "notifications", "Personalization": "personalization",
                   "Power": "powersleep", "Mouse": "mousetouchpad", "Privacy": "privacy",
                   "Storage": "storagesense", "Default apps": "defaultapps"}
-WEBSITES = {"YouTube": "https://www.youtube.com", "Gmail": "https://mail.google.com", "Google": "https://www.google.com"}
+WEBSITES = {
+    "YouTube": "https://www.youtube.com", "Gmail": "https://mail.google.com",
+    "Google": "https://www.google.com", "LinkedIn": "https://www.linkedin.com/feed/",
+    "GitHub": "https://github.com", "Reddit": "https://www.reddit.com",
+    "Instagram": "https://www.instagram.com", "Facebook": "https://www.facebook.com",
+    "X": "https://x.com", "WhatsApp": "https://web.whatsapp.com",
+    "Google Drive": "https://drive.google.com", "Google Calendar": "https://calendar.google.com",
+    "Notion": "https://www.notion.so",
+}
 
 
 def builtin_places():

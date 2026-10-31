@@ -124,11 +124,22 @@ def test_commands_settings_pages_build_offscreen():
     app.commands = commands.Context([spotify], winactions.Actions(), aliases=[commands.Alias("music", "spotify")])
     app.restart = app.quit = lambda: None
     app.set_option = lambda key, value: app.cfg.__setitem__(key, value)
+    app.panel_leave = 1.0
+    app.picker = app.mic_menu = type("HiddenPopup", (), {"hide": lambda self: None})()
+    app.bar = type("Bar", (), {"x": 100, "y": 700, "w": 300, "by0": 50})()
     panel = localflow.Panel(app)
     app.panel = panel
     try:
-        panel.open_tab("Commands")
+        panel.show("settings", "Commands")
         root.update_idletasks()
+        assert app.panel_leave is None and panel.visible
+        panel.hide()
+        app.panel_leave = 1.0
+        panel.show("notes")
+        root.update_idletasks()
+        assert app.panel_leave is None and panel.visible
+        panel.hide()
+        panel.open_tab("Commands")
         panel._show_commands_view("add")
         root.update_idletasks()
         assert panel.page_title.cget("text") == "Add a name"

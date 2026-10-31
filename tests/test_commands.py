@@ -68,7 +68,8 @@ DOWNLOADS = Target("folder:downloads", "Downloads", "folder", r"C:\Users\me\Down
 DDRIVE = Target("drive:d", "D drive", "folder", "D:\\")
 BLUETOOTH = Target("settings:bluetooth", "Bluetooth settings", "settings", "ms-settings:bluetooth")
 YOUTUBE = Target("site:youtube", "YouTube", "website", "https://www.youtube.com")
-PLACES = (DOWNLOADS, DDRIVE, BLUETOOTH, YOUTUBE)
+LINKEDIN = Target("site:linkedin", "LinkedIn", "website", "https://www.linkedin.com/feed/")
+PLACES = (DOWNLOADS, DDRIVE, BLUETOOTH, YOUTUBE, LINKEDIN)
 
 
 def ctx(actions=None, catalog=(SPOTIFY, CHROME, VSCODE) + PLACES):
@@ -93,6 +94,19 @@ def test_open_a_running_app_switches_to_it_instead_of_launching_again():
 def test_short_and_misheard_names_still_find_the_app():
     assert handle("Open VS code", ctx()).card.obj == "Visual Studio Code"
     assert handle("launch spotfy", ctx()).card.obj == "Spotify"
+
+
+def test_clawed_and_cloud_open_claude():
+    claude = Target("claude", "Claude")
+    assert handle("open clawed", ctx(catalog=(claude,))).card.obj == "Claude"
+    assert handle("open cloud", ctx(catalog=(claude,))).card.obj == "Claude"
+
+
+def test_polite_command_phrases_are_understood_without_changing_dictation():
+    assert handle("Can you open Spotify?", ctx()).card.obj == "Spotify"
+    assert handle("Could you please launch Chrome for me?", ctx()).card.obj == "Google Chrome"
+    assert handle("Please pause, thanks.", ctx()).card.verb == "Paused"
+    assert handle("Can you remind the team about Friday?", ctx()) == Dictation("Can you remind the team about Friday?")
 
 
 def test_a_command_that_fits_no_app_is_a_no_match_and_does_nothing():
@@ -166,8 +180,10 @@ def test_folders_drives_settings_and_websites_open_as_places():
     assert handle("open d drive", ctx(actions)).card.obj == "D drive"
     assert handle("open bluetooth settings", ctx(actions)).card.obj == "Bluetooth settings"
     assert handle("open youtube", ctx(actions)).card.obj == "YouTube"
+    assert handle("can you open linkedin", ctx(actions)).card.obj == "LinkedIn"
     assert actions.calls == [("open_place", r"C:\Users\me\Downloads"), ("open_place", "D:\\"),
-                             ("open_place", "ms-settings:bluetooth"), ("open_place", "https://www.youtube.com")]
+                             ("open_place", "ms-settings:bluetooth"), ("open_place", "https://www.youtube.com"),
+                             ("open_place", "https://www.linkedin.com/feed/")]
 
 
 def test_search_spotify_youtube_and_the_web():

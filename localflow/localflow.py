@@ -2902,6 +2902,7 @@ class Panel(Popup):
     def show(self, page, tab=None, pinned=False):
         self.app.picker.hide()
         self.app.mic_menu.hide()
+        self.app.panel_leave = None  # a previous close-away timer must not close the reopened panel
         self.page = "notes" if page == "notes" else "settings"
         if self.page == "notes":
             self.settings_root.pack_forget()

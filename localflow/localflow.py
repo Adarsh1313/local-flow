@@ -60,6 +60,9 @@ import requests
 import sounddevice as sd
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
+import commands
+import winactions
+
 SR = 16000
 FRAME = 800  # 50 ms analysis frames
 
@@ -85,6 +88,7 @@ DEFAULTS = {
     "ambient_mode": False,         # listen on the laptop mic for the wake phrase
     "wake_phrase": "Hey Jarvis",
     "ambient_end_silence": 2.0,    # seconds of quiet that end a wake-word dictation
+    "commands_enabled": True,      # "Hey Jarvis, open Spotify" runs instead of pasting
     "learn_corrections": True,     # learn from words you fix right after dictating
     "save_training_data": False,   # keep audio + final text for fine-tuning later
 }
@@ -3005,6 +3009,7 @@ class App:
         self.ambient = AmbientListener(self)
         self.mics.before_restart = lambda: (self._close_mic(), self.ambient.close_mic())
         self.wake_session = False   # the current dictation was started by the wake word
+        self.commands = commands.Context(catalog=[], actions=winactions.Actions(), log=log)
         self.last_voice = 0
         self.state_lock = threading.Lock()
         self.starting = False      # mic is being opened in the background
@@ -3060,7 +3065,27 @@ class App:
         self._start_tray()
         threading.Thread(target=self._load_engine, daemon=True).start()
         threading.Thread(target=self._watch_mics, daemon=True).start()
+        threading.Thread(target=self._load_commands, daemon=True).start()
         self.root.after(30, self._tick)
+
+    def _load_commands(self):
+        """Lists the installed apps for Commands (takes ~1 s, so off the UI thread)."""
+        try:
+            self.commands.catalog = winactions.load_catalog()
+            log(f"Commands: {len(self.commands.catalog)} apps")
+        except Exception as e:
+            log("Couldn't list apps for Commands:", repr(e))
+
+    def _run_command(self, text):
+        """Returns True when the text was a Command (or a No match) and must not be pasted."""
+        out = commands.handle(text, self.commands)
+        if isinstance(out, commands.Dictation):
+            return False
+        card = out.card
+        log(f"Command: {text!r} -> {type(out).__name__} {card.verb} {card.obj}")
+        secs = 1.6 if isinstance(out, commands.Done) else 2.4
+        self.post("overlay", "message", f"{card.verb} {card.obj}", secs)
+        return True
 
     # -- background events -> UI thread
     def post(self, *msg):
@@ -3429,20 +3454,22 @@ class App:
         self._stop()
 
     def _stop(self):
-        self.wake_session = False
+        handsfree_turn, self.wake_session = self.wake_session, False
         session, self.session = self.session, None
         if not session:
             return
         self.busy = True
         self._beep(660)
         self.post("overlay", "busy")
-        threading.Thread(target=self._finish, args=(session,), daemon=True).start()
+        threading.Thread(target=self._finish, args=(session, handsfree_turn), daemon=True).start()
 
-    def _finish(self, session):
+    def _finish(self, session, handsfree_turn=False):
         try:
             t = time.time()
             text = session.finish()
             asr_time = time.time() - t
+            if handsfree_turn and self.cfg["commands_enabled"] and text and self._run_command(text):
+                return
             if self.cfg["llm_cleanup"] and text:
                 try:
                     text = llm_cleanup(text, self.cfg)

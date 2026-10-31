@@ -6,7 +6,7 @@ Offline, free hold-to-talk dictation for Windows 11 on modest hardware
 ## Commands (run from localflow/)
 - Setup: `setup.bat` (creates .venv, installs requirements.txt)
 - Run: `run.bat` (background, tray icon) · `debug.bat` (with console)
-- Tests: none yet
+- Tests: `.venvScriptspython -m pytest ../tests` (Windows desktop tests: add `-m windows`)
 - Design showcase preview: launch config `design` in .claude/launch.json (port 8765)
 
 ## Folder map

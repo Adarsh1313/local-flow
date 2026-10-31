@@ -227,7 +227,7 @@ ones built from the apps the user opens most. Everything runs offline with no AI
 
 ## Progress
 
-- [ ] 1. Test setup + Commands module skeleton + "open/switch to <app>" end to end via
+- [x] 1. Test setup + Commands module skeleton + "open/switch to <app>" end to end via
       Wake word (Catalog from Start apps, real Actions launch/switch, plain text card)
 - [ ] 2. Command card visuals: ice-blue listening wave, real icons, slide/fade, hold
       timings, hover-to-keep, success/No match sounds, No match and Couldn't open

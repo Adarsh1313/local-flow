@@ -8,6 +8,7 @@ cleanup runs through a local Ollama model. Settings live in config.json.
 import ctypes
 import ctypes.wintypes
 import functools
+import itertools
 import json
 import logging
 import math
@@ -1106,10 +1107,14 @@ def _shape(w, h, r, fill, outline, width, edge):
     return im
 
 
+_photo_serial = itertools.count()
+
+
 def photo(im):
     """A PhotoImage that keeps its PIL image, so a Layer can draw it too."""
     ph = ImageTk.PhotoImage(im)
     ph.pil = im
+    ph.serial = next(_photo_serial)
     return ph
 
 
@@ -1286,13 +1291,15 @@ def pil_font(font):
     if family in ("Segoe Fluent Icons", "Segoe MDL2 Assets"):
         return _icon_font(size)
     if family.startswith("Segoe UI Variable"):
-        style = family[len("Segoe UI Variable"):].strip().replace("Semib", "Semibold").replace("Semiboldold", "Semibold")
+        # tk's "Segoe UI Variable Text Semibold" is the font's "Semibold Text" instance
+        words = family[len("Segoe UI Variable"):].split()
+        opsz = words[0] if words else "Text"
+        weight = "Semibold" if any(w.startswith("Semib") for w in words[1:]) else "Regular"
+        want = "Regular" if (weight, opsz) == ("Regular", "Text") else f"{weight} {opsz}"
         try:
             f = ImageFont.truetype(os.path.join(fonts, FONT_FILES["Segoe UI Variable"]), size)
             names = [n.decode() if isinstance(n, bytes) else n for n in f.get_variation_names()]
-            want = next((n for n in names if n.lower() == style.lower()), None) or \
-                next((n for n in names if n.lower().startswith(style.split()[0].lower())), None)
-            if want:
+            if want in names:
                 f.set_variation_by_name(want)
             return f
         except Exception:
@@ -1302,6 +1309,10 @@ def pil_font(font):
         return ImageFont.truetype(os.path.join(fonts, name), size)
     except Exception:
         return ImageFont.load_default()
+
+
+def _px(v):
+    return int(math.floor(v + 0.5))
 
 
 _TEXT_ANCHOR = {"w": "lm", "e": "rm", "center": "mm", "n": "mt", "s": "mb", "nw": "lt", "ne": "rt",
@@ -1315,11 +1326,11 @@ def render_ops(ops, w, h):
     for op in ops:
         kind = op[0]
         if kind == "image":
-            _, src, x, y, anchor = op
+            _, src, x, y, anchor, _ = op
             sw, sh = src.size
             if anchor == "center":
                 x, y = x - sw / 2, y - sh / 2
-            x, y = round(x), round(y)
+            x, y = _px(x), _px(y)
             sx, sy = max(0, -x), max(0, -y)   # clip to the window
             ex, ey = min(sw, im.width - x), min(sh, im.height - y)
             if ex > sx and ey > sy:
@@ -1327,14 +1338,14 @@ def render_ops(ops, w, h):
         elif kind == "rect":
             _, x0, y0, x1, y1, fill = op
             if fill:
-                draw.rectangle((round(x0), round(y0), round(x1) - 1, round(y1) - 1), fill=fill)
+                draw.rectangle((_px(x0), _px(y0), _px(x1) - 1, _px(y1) - 1), fill=fill)
         elif kind == "line":
             _, x0, y0, x1, y1, fill, width = op
             draw.line((x0, y0, x1, y1), fill=fill, width=max(1, int(width)))
         elif kind == "text":
             _, x, y, text, fill, font, anchor = op
             src, (dx, dy) = _text_image(text, fill, font, _TEXT_ANCHOR.get(anchor, "mm"))
-            x, y = round(x + dx), round(y + dy)
+            x, y = _px(x + dx), _px(y + dy)
             sw, sh = src.size
             sx, sy = max(0, -x), max(0, -y)
             ex, ey = min(sw, im.width - x), min(sh, im.height - y)
@@ -1390,7 +1401,7 @@ class Layer:
         self.ops = []
 
     def create_image(self, x, y, image=None, anchor="nw", tags=()):
-        self.ops.append(("image", image.pil, x, y, anchor))
+        self.ops.append(("image", image.pil, x, y, anchor, image.serial))
 
     def create_text(self, x, y, text="", fill="", font=None, anchor="center", **_):
         self.ops.append(("text", x, y, text, fill, font, anchor))
@@ -1419,7 +1430,7 @@ class Layer:
     # -- on screen
     def present(self, x, y, alpha=1.0):
         """Show what was drawn with its top-left at (x, y) on screen."""
-        state = (tuple((op[0], id(op[1])) + op[2:] if op[0] == "image" else op for op in self.ops),
+        state = (tuple(op[:1] + op[2:] if op[0] == "image" else op for op in self.ops),
                  self.w, self.h, round(x), round(y), round(alpha * 255))
         if state == self.shown:
             return
@@ -1435,6 +1446,10 @@ class Layer:
 
     def park(self):
         self.present(-20000, -20000, 0)
+
+    def destroy(self):
+        self._free()
+        self.win.destroy()
 
     def _update(self, im, x, y, alpha):
         hwnd = self.hwnd
@@ -3871,9 +3886,10 @@ class App:
         self.overlay = overlay
         self.bar = HoverBar(self)
         old_card, self.card = self.card, CommandCard(self)
-        for w in (old_overlay.win, old_bar.win, old_card.win):
+        old = [old_overlay.canvas, old_bar.canvas, old_card.canvas, getattr(old_card, "tipcanvas", None)]
+        for layer in filter(None, old):
             try:
-                w.destroy()
+                layer.destroy()
             except Exception:
                 pass
         self.area = self._area()

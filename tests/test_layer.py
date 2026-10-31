@@ -16,7 +16,7 @@ def ui():
 
 
 def test_pill_has_clear_corners_and_smooth_edges(ui):
-    ops = [("image", ui._shape(200, 40, 20, ui.T["surface"], ui.T["popup_border"], 1, ""), 10, 10, "nw"),
+    ops = [("image", ui._shape(200, 40, 20, ui.T["surface"], ui.T["popup_border"], 1, ""), 10, 10, "nw", 0),
            ("text", 110, 30, "Listening", ui.T["text"], ui.F["body"], "center")]
     im = ui.render_ops(ops, 220, 60)
     alpha = im.getchannel("A")

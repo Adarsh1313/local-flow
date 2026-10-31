@@ -11,6 +11,7 @@ localflow/history_old.txt
 localflow/dictionary.json
 localflow/notes.txt
 localflow/localflow.log
+localflow/commands.jsonl
 localflow/last_recording.wav
 localflow/training/
 localflow/*.tmp

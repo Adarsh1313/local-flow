@@ -4,8 +4,10 @@ Pure logic (no tkinter, mic or model) so it can be tested. Everything that touch
 Windows goes through the `actions` object in the Context. Terms: see GLOSSARY.md.
 """
 import difflib
+import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from urllib.parse import quote, quote_plus
 
 
@@ -51,6 +53,8 @@ class NeedsConfirmation:
     """A Command that closes several apps waits for a yes or no."""
     question: str      # "Close 6 apps?"
     apps: list         # [(Target, [window titles])]
+    remaining: tuple = ()
+    routine_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -60,15 +64,31 @@ class Alias:
     suggested: bool = False
 
 
+@dataclass(frozen=True)
+class RoutineStep:
+    type: str             # open, close, close_all_except, minimise_all, media
+    target_id: str = ""
+    keep: tuple = ()
+    action: str = ""
+
+
+@dataclass(frozen=True)
+class Routine:
+    name: str
+    steps: tuple = ()
+    suggested: bool = False
+
+
 @dataclass
 class Context:
     catalog: list
     actions: object
     log: object = print   # where details of failures go (localflow.log in the app)
     aliases: list = field(default_factory=list)
+    routines: list = field(default_factory=list)
     usage: dict = field(default_factory=dict)          # target id -> times used by voice
-    windows_usage: dict = field(default_factory=dict)  # target id -> minutes Windows saw it in use
-    on_use: object = lambda target_id: None            # records a use (the command log)
+    windows_usage: dict = field(default_factory=dict)  # target id -> Windows UserAssist use score
+    on_use: object = lambda target_id, heard: None     # records a use (the command log)
 
 
 OPEN_VERBS = ("open", "launch", "start", "switch to", "go to")
@@ -139,6 +159,7 @@ class Intent:
     action: str = ""        # media: "pause", "play", "next", "previous"
     level: int = 0          # volume: 0-100
     query: str = ""         # search: what to look for
+    routine: Routine = None
 
 
 MEDIA_VERBS = {"pause": "pause", "stop": "pause", "play": "play", "resume": "play",
@@ -185,6 +206,9 @@ GLYPH_MINIMISE, GLYPH_CLOSED, GLYPH_KEPT = "", "", ""
 def understand(heard, ctx):
     """What the turn asks for: an Intent, a NoMatch, or None for Dictation. Never acts."""
     words = normalise(heard)
+    routine = next((r for r in ctx.routines if normalise(r.name) == words), None)
+    if routine:
+        return Intent("routine", routine=routine)
     m = SEARCH.match(words)
     if m and len(words.split()) <= MAX_SEARCH_WORDS:
         query, where = heard_query(heard, m.group("q")), (m.group("where") or "web")
@@ -247,15 +271,16 @@ def find_by_name(name, catalog):
     return next((t for t in catalog if t.name == name), None)
 
 
-def used(target, ctx):
+def used(target, heard, ctx):
     if target is not None:
         ctx.usage[target.id] = ctx.usage.get(target.id, 0) + 1
-        ctx.on_use(target.id)
+        ctx.on_use(target.id, heard)
 
 
 def carry_out(intent, ctx):
     a = ctx.actions
-    used(intent.target, ctx)
+    if intent.kind == "routine":
+        return run_routine(intent.routine, ctx)
     if intent.kind == "media":
         player = a.media(intent.action, intent.target)
         if not player:
@@ -318,6 +343,44 @@ def closable(ctx):
             if normalise(t.name).replace(" ", "") not in NEVER_CLOSE]
 
 
+def run_routine(routine, ctx):
+    """Run a deliberately small, non-shell set of routine steps in order."""
+    by_id = {t.id: t for t in ctx.catalog}
+    for index, step in enumerate(routine.steps):
+        if step.type == "minimise_all":
+            ctx.actions.minimise_all()
+            continue
+        if step.type == "media":
+            target = by_id.get(step.target_id) if step.target_id else None
+            if not ctx.actions.media(step.action, target):
+                return NoMatch(Card("Nothing", "playing", kind="no_match"))
+            continue
+        if step.type == "close_all_except":
+            keep = set(step.keep)
+            apps = [(t, titles) for t, titles in closable(ctx) if t.id not in keep]
+            if len(apps) >= 2:
+                return NeedsConfirmation(f"Close {len(apps)} apps?", apps, routine.steps[index + 1:], routine.name)
+            if apps:
+                ctx.actions.close(apps[0][0])
+            continue
+        target = by_id.get(step.target_id)
+        if target is None:
+            ctx.log(f"Routine {routine.name!r}: missing target {step.target_id!r}")
+            return Failed(Card("Couldn't run", routine.name, kind="failed"))
+        if step.type == "close":
+            if normalise(target.name).replace(" ", "") not in NEVER_CLOSE:
+                ctx.actions.close(target)
+        elif step.type == "open":
+            used(target, routine.name, ctx)
+            result = carry_out(Intent("open", target), ctx)
+            if isinstance(result, Failed):
+                return result
+        else:
+            ctx.log(f"Routine {routine.name!r}: unsupported step {step.type!r}")
+            return Failed(Card("Couldn't run", routine.name, kind="failed"))
+    return Done(Card("Ran", routine.name, glyph=""))
+
+
 def answer(heard):
     """A spoken reply to a Confirmation: "yes", "no" (silence is no), or None if unclear."""
     words = normalise(heard)
@@ -339,6 +402,8 @@ def confirm(asked, yes, ctx):
             ctx.actions.close(t)
         except Exception as e:
             ctx.log(f"Couldn't close {t.name}: {e!r}")
+    if asked.remaining:
+        return run_routine(Routine(asked.routine_name, asked.remaining), ctx)
     return Done(Card("Closed", n, glyph=GLYPH_CLOSED))
 
 
@@ -373,8 +438,69 @@ def top_apps(catalog, usage, windows_usage, favourites=FAVOURITES):
     return out
 
 
+def routine_from_dict(item):
+    steps = tuple(RoutineStep(s.get("type", ""), s.get("target_id", ""), tuple(s.get("keep", ())),
+                              s.get("action", "")) for s in item.get("steps", ()))
+    return Routine(item.get("name", ""), steps, item.get("suggested", False))
+
+
+def routine_to_dict(routine):
+    return {"name": routine.name,
+            "steps": [{"type": s.type, "target_id": s.target_id, "keep": list(s.keep), "action": s.action}
+                      for s in routine.steps],
+            "suggested": routine.suggested}
+
+
+def suggested_routines(catalog, dismissed):
+    """Safe starter routines, generated only when their Targets exist."""
+    by_name = {t.name: t for t in catalog}
+    out = []
+    if "work mode" not in dismissed and "Claude" in by_name and "Google Chrome" in by_name:
+        out.append(Routine("Work mode", (RoutineStep("open", by_name["Claude"].id),
+                                         RoutineStep("open", by_name["Google Chrome"].id)), True))
+    if "break time" not in dismissed and "YouTube" in by_name:
+        out.append(Routine("Break time", (RoutineStep("open", by_name["YouTube"].id),), True))
+    if "wrap up" not in dismissed and "File Explorer" in by_name:
+        out.append(Routine("Wrap up", (RoutineStep("close_all_except", keep=(by_name["File Explorer"].id,)),), True))
+    return out
+
+
+def read_command_usage(path):
+    """Rebuild voice-use counts from the private JSONL command log.
+
+    A damaged line is ignored so one interrupted write never disables Commands.
+    """
+    usage = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return usage
+    except OSError:
+        return usage
+    for line in lines:
+        try:
+            target_id = json.loads(line).get("target")
+        except (ValueError, TypeError):
+            continue
+        if target_id:
+            usage[target_id] = usage.get(target_id, 0) + 1
+    return usage
+
+
+def append_command(path, heard, target_id, when=None):
+    """Append one private command event. The log is deliberately separate from
+    Dictation history and contains no audio or transcription beyond the Command."""
+    event = {"ts": (when or datetime.now()).isoformat(timespec="seconds"),
+             "command": heard, "target": target_id}
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
 def handle(heard, ctx):
     found = understand(heard, ctx)
     if found is None:
         return Dictation(heard)
-    return found if isinstance(found, NoMatch) else carry_out(found, ctx)
+    if isinstance(found, NoMatch):
+        return found
+    used(found.target, heard, ctx)
+    return carry_out(found, ctx)

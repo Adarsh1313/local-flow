@@ -30,6 +30,24 @@ def test_catalog_lists_store_and_desktop_apps():
     assert {"Notepad", "File Explorer"} <= names
 
 
+def test_user_added_app_uses_its_path(tmp_path):
+    import winactions
+    app = tmp_path / "My Tool.bat"
+    app.write_text("@echo off\n", encoding="utf-8")
+    targets = winactions.user_targets([{"name": "My Tool", "path": str(app)}])
+    assert len(targets) == 1
+    assert (targets[0].name, targets[0].path) == ("My Tool", str(app))
+    assert winactions.shell_path(targets[0]) == str(app)
+
+
+def test_user_added_folder_and_website_become_places(tmp_path):
+    import winactions
+    items = [{"name": "Project", "path": str(tmp_path), "kind": "folder"},
+             {"name": "Example", "path": "https://example.com", "kind": "website"}]
+    targets = winactions.custom_places(items)
+    assert [(t.name, t.kind) for t in targets] == [("Project", "folder"), ("Example", "website")]
+
+
 def test_real_icons_for_an_app_and_a_folder(notepad, tmp_path):
     import winactions
     for source in (notepad, tmp_path):
@@ -84,3 +102,36 @@ def test_running_apps_minimise_and_close(notepad):
     assert wait_for(lambda: winactions.user32.IsIconic(hwnd))
     a.close(notepad)
     assert wait_for(lambda: not winactions.windows_of(notepad))
+
+
+def test_commands_settings_pages_build_offscreen():
+    import tkinter as tk
+    import commands
+    import localflow
+    import winactions
+
+    root = tk.Tk()
+    root.withdraw()
+    localflow.init_fonts(root)
+
+    class FakeApp:
+        pass
+
+    app = FakeApp()
+    app.root = root
+    app.cfg = dict(localflow.DEFAULTS)
+    spotify = commands.Target("spotify", "Spotify")
+    app.commands = commands.Context([spotify], winactions.Actions(), aliases=[commands.Alias("music", "spotify")])
+    app.restart = app.quit = lambda: None
+    app.set_option = lambda key, value: app.cfg.__setitem__(key, value)
+    panel = localflow.Panel(app)
+    app.panel = panel
+    try:
+        panel.open_tab("Commands")
+        root.update_idletasks()
+        panel._show_commands_view("add")
+        root.update_idletasks()
+        assert panel.page_title.cget("text") == "Add a name"
+    finally:
+        panel.win.destroy()
+        root.destroy()

@@ -1,6 +1,10 @@
 """Behaviour of a Hands-free turn: heard text in, outcome and Windows actions out."""
-from commands import (Alias, Context, Dictation, Done, Failed, NeedsConfirmation, NoMatch, Target, answer, confirm,
-                      handle, is_complete_command, suggested_aliases, top_apps)
+from datetime import datetime
+
+from commands import (Alias, Context, Dictation, Done, Failed, NeedsConfirmation, NoMatch, Routine, RoutineStep,
+                      Target, answer,
+                      append_command, confirm, handle, is_complete_command, read_command_usage, suggested_aliases,
+                      suggested_routines, top_apps)
 
 
 class FakeActions:
@@ -257,10 +261,22 @@ def test_duplicate_apps_prefer_voice_use_then_windows_use_then_the_store_version
 def test_each_command_is_counted_so_suggestions_learn():
     c = ctx()
     used = []
-    c.on_use = used.append
+    c.on_use = lambda target_id, heard: used.append((target_id, heard))
     handle("open spotify", c)
     handle("open spotify", c)
-    assert c.usage == {"spotify": 2} and used == ["spotify", "spotify"]
+    assert c.usage == {"spotify": 2}
+    assert used == [("spotify", "open spotify"), ("spotify", "open spotify")]
+
+
+def test_command_log_rebuilds_usage_and_ignores_a_damaged_line(tmp_path):
+    path = tmp_path / "commands.jsonl"
+    append_command(path, "open spotify", "spotify", datetime(2026, 10, 31, 12, 0))
+    append_command(path, "pause spotify", "spotify", datetime(2026, 10, 31, 12, 1))
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("not json\n")
+    assert read_command_usage(path) == {"spotify": 2}
+    text = path.read_text(encoding="utf-8")
+    assert '"command": "open spotify"' in text and '"ts": "2026-10-31T12:00:00"' in text
 
 
 def test_suggested_aliases_only_for_installed_apps_and_not_dismissed():
@@ -276,6 +292,48 @@ def test_top_apps_put_named_favourites_and_most_used_first():
     catalog = [VSCODE, SPOTIFY, CHROME]
     top = top_apps(catalog, usage={"vscode": 1}, windows_usage={"chrome": 178}, favourites=["Spotify"])
     assert [t.id for t in top] == ["vscode", "chrome", "spotify"]
+
+
+def test_a_routine_runs_safe_steps_in_order():
+    actions = FakeActions()
+    c = ctx(actions)
+    c.routines = [Routine("Work mode", (RoutineStep("open", "chrome"), RoutineStep("open", "spotify"),
+                                        RoutineStep("minimise_all"), RoutineStep("media", action="play")))]
+    out = handle("work mode", c)
+    assert (out.card.verb, out.card.obj) == ("Ran", "Work mode")
+    assert actions.calls == [("switch_to", "chrome"), ("launch", "chrome"),
+                             ("switch_to", "spotify"), ("launch", "spotify"),
+                             ("minimise_all",), ("media", "play", None)]
+
+
+def test_wrap_up_keeps_the_chosen_app_and_asks_before_closing_the_rest():
+    actions = busy_desk()
+    explorer = Target("explorer", "File Explorer")
+    actions.windows["explorer"] = ["Documents"]
+    c = ctx(actions, catalog=(SPOTIFY, CHROME, VSCODE, LOCALFLOW, explorer))
+    c.routines = [Routine("Wrap up", (RoutineStep("close_all_except", keep=("explorer",)),))]
+    out = handle("Wrap up", c)
+    assert isinstance(out, NeedsConfirmation)
+    assert [t.id for t, _ in out.apps] == ["spotify", "chrome", "vscode"]
+
+
+def test_a_confirmed_close_step_continues_the_routine():
+    actions = busy_desk()
+    c = ctx(actions)
+    c.routines = [Routine("Reset", (RoutineStep("close_all_except"), RoutineStep("open", "spotify")))]
+    asked = handle("reset", c)
+    out = confirm(asked, True, c)
+    assert (out.card.verb, out.card.obj) == ("Ran", "Reset")
+    assert ("launch", "spotify") in actions.calls
+
+
+def test_suggested_routines_need_their_apps_and_stay_dismissed():
+    explorer = Target("explorer", "File Explorer")
+    youtube = Target("youtube", "YouTube", "website", "https://youtube.com")
+    claude = Target("claude", "Claude")
+    got = suggested_routines([CHROME, claude, explorer, youtube], {"break time"})
+    assert [r.name for r in got] == ["Work mode", "Wrap up"]
+    assert all(r.suggested for r in got)
 
 
 def test_speech_without_a_command_word_is_dictation():

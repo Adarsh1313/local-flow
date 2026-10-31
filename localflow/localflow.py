@@ -35,6 +35,7 @@ DICT_PATH = APP_DIR / "dictionary.json"
 TRAIN_DIR = APP_DIR / "training"
 LAST_AUDIO_PATH = APP_DIR / "last_recording.wav"
 LOG_PATH = APP_DIR / "localflow.log"
+COMMAND_LOG_PATH = APP_DIR / "commands.jsonl"
 ICON_PATH = APP_DIR / "localflow.ico"
 
 # pythonw has no console, so send prints and errors to a log file.
@@ -51,6 +52,7 @@ for _sp in site.getsitepackages():
 
 import tkinter as tk
 import tkinter.font as tkfont
+from tkinter import filedialog
 
 import keyboard
 import numpy as np
@@ -89,6 +91,11 @@ DEFAULTS = {
     "wake_phrase": "Hey Jarvis",
     "ambient_end_silence": 2.0,    # seconds of quiet that end a wake-word dictation
     "commands_enabled": True,      # "Hey Jarvis, open Spotify" runs instead of pasting
+    "aliases": [],                 # spoken names for Command Targets
+    "routines": [],                # named multi-step Commands
+    "user_apps": [],               # path-based apps missing from the Start menu
+    "user_places": [],             # folders and websites added in Commands settings
+    "suggestions_dismissed": [],   # Suggested names/routines the user removed
     "learn_corrections": True,     # learn from words you fix right after dictating
     "save_training_data": False,   # keep audio + final text for fine-tuning later
 }
@@ -113,6 +120,9 @@ def load_config():
             cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
         except Exception as e:
             log("config.json unreadable, using defaults:", e)
+    for key in ("aliases", "routines", "user_apps", "user_places", "suggestions_dismissed"):
+        if not isinstance(cfg.get(key), list):
+            cfg[key] = []
     save_config(cfg)
     return cfg
 
@@ -1255,7 +1265,7 @@ S = 1.0          # display scale (125% -> 1.25)
 GLYPH = {"notes": "", "settings": "", "mic": "", "paste": "",
          "dictionary": "", "history": "", "check": "", "close": "",
          "pin": "", "pinned": "", "delete": "", "prev": "", "next": "",
-         "chev": "", "edit": ""}
+         "chev": "", "edit": "", "commands": "", "folder": "", "web": ""}
 
 user32 = ctypes.windll.user32
 
@@ -1598,6 +1608,7 @@ class Button(tk.Canvas):
         "primary": ("select", "select_hover", "dim", "select_contrast", ""),
         "subtle": (None, "surface_hover", "control_active", "text", ""),
         "selected": ("control_hover", "control_hover", "control_active", "text", "border"),
+        "danger": (None, "surface_hover", "control_active", "danger", ""),
     }
 
     def __init__(self, parent, text, command, kind="standard", font=None, icon=False, pad_x=12, confirm=None):
@@ -2860,11 +2871,12 @@ def brand_mark(parent):
 
 class Panel(Popup):
     """Two pages in one window: the scratchpad, and settings with a sidebar
-    (General, Microphone, Dictionary, History)."""
+    (General, Microphone, Dictionary, History, Commands)."""
 
-    PAGES = ("General", "Microphone", "Dictionary", "History")
+    PAGES = ("General", "Microphone", "Dictionary", "History", "Commands")
     ICONS = {"General": GLYPH["settings"], "Microphone": GLYPH["mic"],
-             "Dictionary": GLYPH["dictionary"], "History": GLYPH["history"]}
+             "Dictionary": GLYPH["dictionary"], "History": GLYPH["history"],
+             "Commands": GLYPH["commands"]}
     NOTES_SIZE, SETTINGS_SIZE = (440, 560), (720, 600)
 
     def __init__(self, app):
@@ -2872,6 +2884,12 @@ class Panel(Popup):
         self.page = "notes"
         self.tab = "General"
         self.hist_page = 0
+        self.commands_view = "main"
+        self.commands_kind = "app"
+        self.command_target_id = None
+        self.command_search = ""
+        self.command_routine = None
+        self._target_icons = {}
         self._save_job = None
         self._pages = {}  # built settings pages, kept while their data hasn't changed
         self.notes_root = tk.Frame(self.frame, bg=T["bg"])
@@ -2989,6 +3007,8 @@ class Panel(Popup):
         if name not in self.PAGES:
             name = "General"
         changed = name != self.tab
+        if changed and name == "Commands":
+            self.commands_view = "main"
         self.tab = name
         self.page_title.config(text=name)
         inner = self.scroll.inner
@@ -3010,6 +3030,31 @@ class Panel(Popup):
             self.scroll.canvas.yview_moveto(y)
             self.scroll._sync()
         self.nav.select(name)  # after building the page, so the slide isn't swallowed by it
+
+    def _show_commands_view(self, view):
+        self.commands_view = view
+        page = self._pages.pop("Commands", None)
+        if page is not None:
+            page.destroy()
+        self.open_tab("Commands")
+
+    def _target_icon(self, parent, target, size=20):
+        key = (target.id, size)
+        image = self._target_icons.get(key)
+        if image is None:
+            try:
+                raw = winactions.icon_image(target, px(size))
+                image = ImageTk.PhotoImage(raw) if raw else False
+            except Exception:
+                image = False
+            self._target_icons[key] = image
+        if image:
+            widget = tk.Label(parent, image=image, bg=parent.cget("bg"), bd=0)
+            widget.image = image
+            return widget
+        glyph_name = "folder" if target.kind == "folder" else "web" if target.kind == "website" else "commands"
+        return tk.Label(parent, text=GLYPH[glyph_name], font=F["icon"], fg=T["dim"],
+                        bg=parent.cget("bg"), bd=0)
 
     def _switch(self, right, key, getter=None, setter=None):
         cfg = self.app.cfg
@@ -3050,7 +3095,7 @@ class Panel(Popup):
 
         b = group(p, "Text")
         self._switch(row(b, "Remove filler words", 'Drops "um" and "uh"'), "remove_fillers")
-        self._switch(row(b, "Voice commands", 'Say "new line" or "new paragraph"'), "voice_commands")
+        self._switch(row(b, "Spoken formatting", 'Say "new line" or "new paragraph"'), "voice_commands")
         self._switch(row(b, "Lists", 'Say "one… two…" or "next point…" to make a list'), "smart_lists")
         self._switch(row(b, "Learn from my fixes", "Adds names you correct to the dictionary"),
                      "learn_corrections")
@@ -3173,6 +3218,334 @@ class Panel(Popup):
         Button(foot, "Open full history", lambda: os.startfile(HISTORY_PATH) if HISTORY_PATH.exists() else None,
                kind="subtle", font=F["caption"]).pack(side="left")
 
+    # -- Commands
+    def _page_commands(self, p):
+        if self.commands_view == "add":
+            self._page_add_name(p)
+            return
+        if self.commands_view == "routine":
+            self._page_routine(p)
+            return
+        self.page_title.config(text="Commands")
+        b = group(p)
+        self._switch(row(b, "Run commands with the wake word",
+                         f'“{self.app.cfg["wake_phrase"]}, open Spotify” · off: it only dictates'),
+                     "commands_enabled")
+
+        b = group(p, "Routines")
+        targets = {t.id: t for t in self.app.commands.catalog}
+        if not self.app.commands.routines:
+            row(b, "No routines yet", "Run several safe Commands with one phrase")
+        for i, routine in enumerate(self.app.commands.routines):
+            desc = f"{len(routine.steps)} step" + ("" if len(routine.steps) == 1 else "s")
+            if routine.suggested:
+                desc += " · Suggested"
+            right = row(b, routine.name, desc)
+            Button(right, "Edit", lambda index=i: self._edit_routine(index), font=F["caption"]).pack(side="right")
+            for step in reversed(routine.steps[:3]):
+                target = targets.get(step.target_id)
+                if target:
+                    self._target_icon(right, target).pack(side="right", padx=(0, px(SPACE[1])))
+        right = row(b, "New routine", "Choose a phrase, then add steps")
+        Button(right, "New routine", self._new_routine).pack()
+
+        b = group(p, "Names")
+        aliases = list(self.app.commands.aliases)
+        if not aliases:
+            row(b, "No names yet", "Add a shorter spoken name for an app, folder or website")
+        for alias in aliases:
+            target = targets.get(alias.target_id)
+            if target is None:
+                continue
+            spoken = alias.say + (" folder" if target.kind == "folder" and not alias.say.endswith("folder") else "")
+            right = row(b, spoken, f"Opens {target.name}" + (" · Suggested" if alias.suggested else ""))
+            Button(right, GLYPH["delete"], lambda a=alias: self._remove_alias(a), kind="subtle",
+                   icon=True, pad_x=8).pack(side="right")
+            self._target_icon(right, target).pack(side="right", padx=(0, px(SPACE[2])))
+        right = row(b, "Add a name", "Apps, folders and websites")
+        Button(right, "Add name", lambda: self._show_commands_view("add")).pack()
+
+        b = group(p, "What you can say")
+        for phrase, note in (("“Open Spotify”", "Switches if it’s already running"),
+                             ("“Pause” · “Next” · “Volume 30”", "Controls whatever is playing"),
+                             ("“Open Downloads folder”", "Folders, drives and settings pages"),
+                             ("“Search YouTube for lo-fi”", "Spotify, YouTube or the web"),
+                             ("“Close Spotify” · “Minimise everything”", "Closing 2+ apps asks first")):
+            row(b, phrase, note)
+
+    def _remove_alias(self, alias):
+        suggested_names = {commands.normalise(say) for say, _ in commands.SUGGESTED_ALIASES}
+        key = commands.normalise(alias.say)
+        if (alias.suggested or key in suggested_names) and key not in self.app.cfg["suggestions_dismissed"]:
+            self.app.cfg["suggestions_dismissed"].append(key)
+        self.app.commands.aliases = [a for a in self.app.commands.aliases if a != alias]
+        self._save_aliases()
+        self.open_tab("Commands", keep_scroll=True)
+
+    def _save_aliases(self):
+        self.app.cfg["aliases"] = [a.__dict__ for a in self.app.commands.aliases]
+        save_config(self.app.cfg)
+
+    def _page_add_name(self, p):
+        self.page_title.config(text="Add a name")
+        top = tk.Frame(p, bg=T["bg"])
+        top.pack(fill="x", pady=(px(SPACE[2]), px(SPACE[2])))
+        Button(top, "← Commands", lambda: self._show_commands_view("main"), kind="subtle").pack(side="left")
+
+        b = group(p)
+        right = row(b, "Find a target")
+        search = RoundedEntry(right, 18)
+        search.entry.insert(0, self.command_search)
+        search.pack(side="right", padx=(px(SPACE[2]), 0))
+        kinds = (("app", "Apps"), ("folder", "Folders"), ("website", "Website"))
+        Segmented(right, kinds, self.commands_kind, self._set_commands_kind).pack(side="right")
+
+        def search_changed(_=None):
+            self.command_search = search.entry.get().strip()
+            self._rebuild_add_name()
+        search.entry.bind("<Return>", search_changed)
+        Button(right, "Search", search_changed, font=F["caption"]).pack(side="right", padx=(px(SPACE[1]), 0))
+
+        target = next((t for t in self.app.commands.catalog if t.id == self.command_target_id), None)
+        query = commands.normalise(self.command_search)
+        choices = [t for t in self.app.commands.catalog if t.kind == self.commands_kind]
+        if query:
+            choices = [t for t in choices if query in commands.normalise(t.name)]
+        elif self.commands_kind == "app":
+            preferred = commands.top_apps(choices, self.app.commands.usage, self.app.commands.windows_usage)
+            choices = preferred + [t for t in choices if t not in preferred]
+        choices = choices[:10]
+
+        b = group(p, "Results")
+        if not choices:
+            row(b, "No matches", "Try a different name")
+        for choice in choices:
+            right = row(b, choice.name, "Selected" if target and choice.id == target.id else None)
+            Button(right, "Selected" if target and choice.id == target.id else "Choose",
+                   lambda target_id=choice.id: self._select_command_target(target_id),
+                   kind="selected" if target and choice.id == target.id else "standard",
+                   font=F["caption"]).pack(side="right")
+            self._target_icon(right, choice).pack(side="right", padx=(0, px(SPACE[2])))
+
+        if self.commands_kind == "app":
+            tools = tk.Frame(p, bg=T["bg"])
+            tools.pack(fill="x", pady=(px(SPACE[2]), 0))
+            Button(tools, "Add your own app", self._pick_user_app, kind="subtle").pack(side="left")
+        elif self.commands_kind == "folder":
+            tools = tk.Frame(p, bg=T["bg"])
+            tools.pack(fill="x", pady=(px(SPACE[2]), 0))
+            Button(tools, "Add folder", self._pick_user_folder, kind="subtle").pack(side="left")
+        else:
+            site = group(p, "Add website")
+            name_right = row(site, "Name")
+            site_name = RoundedEntry(name_right, 22)
+            site_name.pack()
+            url_right = row(site, "Address", "Starts with https://")
+            site_url = RoundedEntry(url_right, 22)
+            site_url.pack(side="right", padx=(px(SPACE[2]), 0))
+            Button(url_right, "Add",
+                   lambda: self._add_website(site_name.entry.get(), site_url.entry.get()),
+                   kind="primary").pack(side="right")
+
+        b = group(p, "Spoken name")
+        right = row(b, "Say it as", f"Opens {target.name}" if target else "Choose a target above")
+        say = RoundedEntry(right, 16)
+        say.pack(side="right", padx=(px(SPACE[2]), 0))
+        add = Button(right, "Add", lambda: self._add_alias(say.entry.get()), kind="primary")
+        add.pack(side="right")
+        say.entry.bind("<Return>", lambda e: self._add_alias(say.entry.get()))
+        self._add_name_entry = say.entry
+
+    def _set_commands_kind(self, kind):
+        self.commands_kind, self.command_target_id, self.command_search = kind, None, ""
+        self._rebuild_add_name()
+
+    def _rebuild_add_name(self):
+        self._show_commands_view("add")
+
+    def _select_command_target(self, target_id):
+        self.command_target_id = target_id
+        self._rebuild_add_name()
+
+    def _add_alias(self, spoken):
+        spoken = spoken.strip()
+        target = next((t for t in self.app.commands.catalog if t.id == self.command_target_id), None)
+        if not spoken or target is None:
+            return
+        normal = commands.normalise(spoken)
+        if target.kind == "folder" and not normal.endswith(" folder"):
+            spoken += " folder"
+            normal = commands.normalise(spoken)
+        suggested_names = {commands.normalise(say) for say, _ in commands.SUGGESTED_ALIASES}
+        if normal in suggested_names and normal not in self.app.cfg["suggestions_dismissed"]:
+            self.app.cfg["suggestions_dismissed"].append(normal)
+        self.app.commands.aliases = [a for a in self.app.commands.aliases
+                                     if commands.normalise(a.say) != normal]
+        self.app.commands.aliases.append(commands.Alias(spoken, target.id))
+        self._save_aliases()
+        self.command_target_id, self.command_search = None, ""
+        self._show_commands_view("main")
+
+    def _pick_user_app(self):
+        path = filedialog.askopenfilename(parent=self.win, title="Add an app",
+                                          filetypes=[("Apps and shortcuts", "*.exe *.bat *.lnk")])
+        if not path:
+            return
+        item = {"name": Path(path).stem, "path": path}
+        target = winactions.user_targets([item])[0]
+        if all(a.get("path") != path for a in self.app.cfg["user_apps"]):
+            self.app.cfg["user_apps"].append(item)
+            save_config(self.app.cfg)
+        if all(t.id != target.id for t in self.app.commands.catalog):
+            self.app.commands.catalog.append(target)
+        self.command_target_id = target.id
+        self._rebuild_add_name()
+
+    def _pick_user_folder(self):
+        path = filedialog.askdirectory(parent=self.win, title="Add a folder")
+        if path:
+            self._add_user_place(Path(path).name, path, "folder")
+
+    def _add_website(self, name, url):
+        name, url = name.strip(), url.strip()
+        if not name or not url.lower().startswith(("http://", "https://")):
+            return
+        self._add_user_place(name, url, "website")
+
+    def _add_user_place(self, name, path, kind):
+        item = {"name": name, "path": path, "kind": kind}
+        targets = winactions.custom_places([item])
+        if not targets:
+            return
+        target = targets[0]
+        if all(p.get("path") != path for p in self.app.cfg["user_places"]):
+            self.app.cfg["user_places"].append(item)
+            save_config(self.app.cfg)
+        if all(t.id != target.id for t in self.app.commands.catalog):
+            self.app.commands.catalog.append(target)
+        self.command_target_id = target.id
+        self._rebuild_add_name()
+
+    def _new_routine(self):
+        self.app.commands.routines.append(commands.Routine("New routine"))
+        self.command_routine = len(self.app.commands.routines) - 1
+        self._save_routines()
+        self._show_commands_view("routine")
+
+    def _edit_routine(self, index):
+        self.command_routine = index
+        self._show_commands_view("routine")
+
+    def _save_routines(self):
+        self.app.cfg["routines"] = [commands.routine_to_dict(r) for r in self.app.commands.routines]
+        save_config(self.app.cfg)
+
+    def _page_routine(self, p):
+        if self.command_routine is None or self.command_routine >= len(self.app.commands.routines):
+            self._show_commands_view("main")
+            return
+        routine = self.app.commands.routines[self.command_routine]
+        self.page_title.config(text=routine.name)
+        top = tk.Frame(p, bg=T["bg"])
+        top.pack(fill="x", pady=(px(SPACE[2]), px(SPACE[2])))
+        Button(top, "← Commands", lambda: self._show_commands_view("main"), kind="subtle").pack(side="left")
+
+        b = group(p)
+        right = row(b, "Name", "What you say after the wake word")
+        name = RoundedEntry(right, 18)
+        name.entry.insert(0, routine.name)
+        name.pack(side="right", padx=(px(SPACE[2]), 0))
+        Button(right, "Save", lambda: self._rename_routine(name.entry.get()), font=F["caption"]).pack(side="right")
+        name.entry.bind("<Return>", lambda e: self._rename_routine(name.entry.get()))
+
+        b = group(p, "Steps")
+        if not routine.steps:
+            row(b, "No steps yet", "Add one below")
+        targets = {t.id: t for t in self.app.commands.catalog}
+        for i, step in enumerate(routine.steps):
+            if step.type == "open":
+                title = "Open " + targets.get(step.target_id, commands.Target("", "Missing app")).name
+            elif step.type == "close":
+                title = "Close " + targets.get(step.target_id, commands.Target("", "Missing app")).name
+            elif step.type == "close_all_except":
+                kept = [targets[k].name for k in step.keep if k in targets]
+                title = "Close all except " + (", ".join(kept) or "nothing")
+            elif step.type == "minimise_all":
+                title = "Minimise everything"
+            else:
+                title = step.action.title()
+            right = row(b, title)
+            Button(right, GLYPH["delete"], lambda index=i: self._remove_routine_step(index),
+                   kind="subtle", icon=True, pad_x=8).pack()
+
+        b = group(p, "Add step", "Routines can open or close Targets, control media, or clear the desktop.")
+        apps = commands.top_apps(self.app.commands.catalog, self.app.commands.usage,
+                                 self.app.commands.windows_usage)[:5]
+        places = [t for t in self.app.commands.catalog if t.kind != "app"][:3]
+        for target in apps + places:
+            right = row(b, target.name)
+            if target.kind == "app":
+                Button(right, "Close", lambda t=target: self._add_routine_step("close", t.id),
+                       kind="subtle", font=F["caption"]).pack(side="right")
+            Button(right, "Open", lambda t=target: self._add_routine_step("open", t.id),
+                   font=F["caption"]).pack(side="right", padx=(0, px(SPACE[1])))
+        right = row(b, "Desktop and media")
+        Button(right, "Minimise all", lambda: self._add_routine_step("minimise_all"),
+               font=F["caption"]).pack(side="right")
+        Button(right, "Pause", lambda: self._add_routine_step("media", action="pause"),
+               kind="subtle", font=F["caption"]).pack(side="right")
+        explorer = next((t for t in self.app.commands.catalog if t.name == "File Explorer"), None)
+        if explorer:
+            right = row(b, "Wrap up safely", "Closing several apps still asks first")
+            Button(right, "Close all except Explorer",
+                   lambda: self._add_routine_step("close_all_except", keep=(explorer.id,)),
+                   font=F["caption"]).pack()
+
+        foot = tk.Frame(p, bg=T["bg"])
+        foot.pack(fill="x", pady=(px(SPACE[5]), 0))
+        Button(foot, "Delete routine", self._delete_routine, kind="danger").pack(side="left")
+
+    def _rename_routine(self, name):
+        name = name.strip()
+        if not name:
+            return
+        old = self.app.commands.routines[self.command_routine]
+        self._dismiss_suggested_routine(old)
+        self.app.commands.routines[self.command_routine] = commands.Routine(name, old.steps, False)
+        self._save_routines()
+        self._show_commands_view("routine")
+
+    def _add_routine_step(self, kind, target_id="", keep=(), action=""):
+        old = self.app.commands.routines[self.command_routine]
+        self._dismiss_suggested_routine(old)
+        step = commands.RoutineStep(kind, target_id, tuple(keep), action)
+        self.app.commands.routines[self.command_routine] = commands.Routine(old.name, old.steps + (step,), False)
+        self._save_routines()
+        self._show_commands_view("routine")
+
+    def _remove_routine_step(self, index):
+        old = self.app.commands.routines[self.command_routine]
+        self._dismiss_suggested_routine(old)
+        steps = old.steps[:index] + old.steps[index + 1:]
+        self.app.commands.routines[self.command_routine] = commands.Routine(old.name, steps, False)
+        self._save_routines()
+        self._show_commands_view("routine")
+
+    def _delete_routine(self):
+        routine = self.app.commands.routines[self.command_routine]
+        self._dismiss_suggested_routine(routine, known_name=True)
+        del self.app.commands.routines[self.command_routine]
+        self.command_routine = None
+        self._save_routines()
+        self._show_commands_view("main")
+
+    def _dismiss_suggested_routine(self, routine, known_name=False):
+        key = commands.normalise(routine.name)
+        templates = {"work mode", "break time", "wrap up"}
+        if (routine.suggested or (known_name and key in templates)) \
+                and key not in self.app.cfg["suggestions_dismissed"]:
+            self.app.cfg["suggestions_dismissed"].append(key)
+
     def _hist_note(self, text):
         self.hist_status.config(text=text)
         self.win.after(2000, lambda: self.visible and self.tab == "History" and self.hist_status.winfo_exists()
@@ -3282,7 +3655,14 @@ class App:
         self.peeked_at = 0          # last_voice time of the pause already checked for a Command
         self.answer_turn = False    # the current turn is a yes/no for a Confirmation
         self.asking = None          # the Confirmation waiting for an answer
-        self.commands = commands.Context(catalog=[], actions=winactions.Actions(lambda: self.commands.catalog), log=log)
+        aliases = [commands.Alias(a["say"], a["target_id"], a.get("suggested", False))
+                   for a in self.cfg["aliases"] if isinstance(a, dict) and a.get("say") and a.get("target_id")]
+        routines = [commands.routine_from_dict(r) for r in self.cfg["routines"]
+                    if isinstance(r, dict) and r.get("name")]
+        self.commands = commands.Context(
+            catalog=[], actions=winactions.Actions(lambda: self.commands.catalog), log=log,
+            aliases=aliases, routines=routines, usage=commands.read_command_usage(COMMAND_LOG_PATH),
+            on_use=self._record_command_use)
         self.last_voice = 0
         self.state_lock = threading.Lock()
         self.starting = False      # mic is being opened in the background
@@ -3360,10 +3740,35 @@ class App:
     def _load_commands(self):
         """Lists the installed apps for Commands (takes ~1 s, so off the UI thread)."""
         try:
-            self.commands.catalog = winactions.load_catalog()
-            log(f"Commands: {len(self.commands.catalog)} apps")
+            self.commands.catalog = winactions.load_catalog(self.cfg["user_apps"], self.cfg["user_places"])
+            self.commands.windows_usage = winactions.windows_usage(self.commands.catalog)
+            existing = {commands.normalise(a.say) for a in self.commands.aliases}
+            suggested = [a for a in commands.suggested_aliases(
+                self.commands.catalog, set(self.cfg["suggestions_dismissed"]))
+                if commands.normalise(a.say) not in existing]
+            if suggested:
+                self.commands.aliases.extend(suggested)
+                self.cfg["aliases"] = [a.__dict__ for a in self.commands.aliases]
+                save_config(self.cfg)
+            routine_names = {commands.normalise(r.name) for r in self.commands.routines}
+            suggested_routines = [r for r in commands.suggested_routines(
+                self.commands.catalog, set(self.cfg["suggestions_dismissed"]))
+                if commands.normalise(r.name) not in routine_names]
+            if suggested_routines:
+                self.commands.routines.extend(suggested_routines)
+                self.cfg["routines"] = [commands.routine_to_dict(r) for r in self.commands.routines]
+                save_config(self.cfg)
+            apps = sum(t.kind == "app" for t in self.commands.catalog)
+            log(f"Commands: {apps} apps, {len(self.commands.catalog) - apps} places")
+            self.post("call", lambda: self.panel.visible and self.panel.tab == "Commands" and self.panel.refresh())
         except Exception as e:
             log("Couldn't list apps for Commands:", repr(e))
+
+    def _record_command_use(self, target_id, heard):
+        try:
+            commands.append_command(COMMAND_LOG_PATH, heard, target_id)
+        except OSError as e:
+            log("Couldn't write command log:", repr(e))
 
     def _run_command(self, text):
         """Returns True when the text was a Command (or a No match) and must not be pasted."""
@@ -3555,6 +3960,10 @@ class App:
 
         def run():
             out = commands.confirm(asked, yes, self.commands)
+            if isinstance(out, commands.NeedsConfirmation):
+                self.asking = out
+                self.post("ask", out)
+                return
             if yes:
                 self._beep(1320, 30)
             self.post("card", out.card)

@@ -238,10 +238,10 @@ ones built from the apps the user opens most. Everything runs offline with no AI
 - [x] 6. Close / minimise + Confirmation card (icon row, counts, window-title tips,
       voice yes/no, buttons, silence cancels)
 - [x] 7. Hold-to-talk with no text field runs Commands
-- [ ] 8. Command log, duplicate ranking, Suggested Aliases and top apps, user-added apps
-- [ ] 9. Commands settings page: switch, Names list, "Add a name" sub-page
-- [ ] 10. Routines: storage, the three Suggested Routines, Routine sub-page editor,
+- [x] 8. Command log, duplicate ranking, Suggested Aliases and top apps, user-added apps
+- [x] 9. Commands settings page: switch, Names list, "Add a name" sub-page
+- [x] 10. Routines: storage, the three Suggested Routines, Routine sub-page editor,
       "What you can say"
-- [ ] 11. Polish & docs: Start menu shortcut in setup, rename "Voice commands" →
+- [x] 11. Polish & docs: Start menu shortcut in setup, rename "Voice commands" →
       "Spoken formatting", README "Hey Cortana" pitch, user guide, Windows integration
       tests pass

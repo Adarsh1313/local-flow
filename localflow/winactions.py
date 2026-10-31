@@ -5,9 +5,12 @@ what a Command means.
 """
 import ctypes
 import ctypes.wintypes as wt
+import codecs
+import hashlib
 import json
 import os
 import subprocess
+import winreg
 from pathlib import Path
 
 from commands import Target, normalise
@@ -42,7 +45,36 @@ def builtin_places():
     return places
 
 
-def load_catalog():
+def user_targets(user_apps=()):
+    """Path-based apps the user added in Commands settings."""
+    out = []
+    for item in user_apps:
+        path = os.path.abspath(os.path.expandvars(item.get("path", "")))
+        name = item.get("name", "").strip() or Path(path).stem
+        if path and Path(path).suffix.lower() in (".exe", ".bat", ".lnk") and os.path.exists(path):
+            key = hashlib.sha1(os.path.normcase(path).encode("utf-8")).hexdigest()[:16]
+            out.append(Target(f"user:{key}", name, "app", path))
+    return out
+
+
+def custom_places(user_places=()):
+    """Folders and websites the user explicitly added in Commands settings."""
+    out = []
+    for item in user_places:
+        kind, path = item.get("kind"), item.get("path", "").strip()
+        name = item.get("name", "").strip()
+        if kind == "folder":
+            path = os.path.abspath(os.path.expandvars(path))
+            valid = os.path.isdir(path)
+        else:
+            valid = kind == "website" and path.lower().startswith(("http://", "https://"))
+        if name and valid:
+            key = hashlib.sha1(f"{kind}:{os.path.normcase(path)}".encode("utf-8")).hexdigest()[:16]
+            out.append(Target(f"user-place:{key}", name, kind, path))
+    return out
+
+
+def load_catalog(user_apps=(), user_places=()):
     """Every app in the Start menu (Store apps included), as Targets keyed by launch ID,
     then the built-in Places."""
     out = subprocess.run(
@@ -51,7 +83,44 @@ def load_catalog():
         capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW)
     rows = json.loads(out.stdout or "[]")
     rows = [rows] if isinstance(rows, dict) else rows
-    return [Target(r["AppID"], r["Name"]) for r in rows if r.get("Name") and r.get("AppID")] + builtin_places()
+    return ([Target(r["AppID"], r["Name"]) for r in rows if r.get("Name") and r.get("AppID")]
+            + user_targets(user_apps) + custom_places(user_places) + builtin_places())
+
+
+def windows_usage(catalog):
+    """Best-effort ranking from Explorer's per-user UserAssist run counts.
+
+    UserAssist is optional and its entries are opaque, so failure simply means no
+    Windows-use tie-breaker. Voice-use counts remain authoritative.
+    """
+    seen = []
+    root = r"Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, root) as parent:
+            for i in range(winreg.QueryInfoKey(parent)[0]):
+                guid = winreg.EnumKey(parent, i)
+                try:
+                    with winreg.OpenKey(parent, guid + r"\Count") as count:
+                        for j in range(winreg.QueryInfoKey(count)[1]):
+                            name, data, _ = winreg.EnumValue(count, j)
+                            decoded = codecs.decode(name, "rot_13").lower()
+                            runs = int.from_bytes(data[4:8], "little") if isinstance(data, bytes) and len(data) >= 8 else 1
+                            seen.append((decoded, runs))
+                except OSError:
+                    continue
+    except OSError:
+        return {}
+    scores = {}
+    for target in catalog:
+        if target.kind != "app":
+            continue
+        needles = {target.id.lower(), normalise(target.name).replace(" ", "")}
+        if target.path:
+            needles.add(Path(target.path).stem.lower())
+        score = sum(runs for name, runs in seen if any(n and n in name.replace(" ", "") for n in needles))
+        if score:
+            scores[target.id] = score
+    return scores
 
 
 def _exe_of(hwnd):
@@ -105,7 +174,8 @@ def _belongs_to(target, exe, cls, title):
         return cls == "CabinetWClass" and normalise(target.name) == "file explorer"
     name = normalise(target.name)
     words = name.split()
-    return (stem and (stem == name.replace(" ", "") or stem == words[-1] or stem in target.id.lower())) \
+    path_stem = normalise(Path(target.path).stem).replace(" ", "") if target.path else ""
+    return (stem and (stem == path_stem or stem == name.replace(" ", "") or stem == words[-1] or stem in target.id.lower())) \
         or normalise(title).endswith(name)
 
 
@@ -211,7 +281,7 @@ def shell_path(target_or_path):
     if isinstance(target_or_path, Target):
         t = target_or_path
         if t.kind == "app":
-            return "shell:AppsFolder\\" + t.id
+            return t.path or "shell:AppsFolder\\" + t.id
         if t.kind == "settings":
             return "shell:AppsFolder\\" + SETTINGS_APP
         return t.path if t.kind == "folder" else None
@@ -332,7 +402,7 @@ class Actions:
         return True
 
     def launch(self, target):
-        os.startfile("shell:AppsFolder\\" + target.id)
+        os.startfile(target.path or "shell:AppsFolder\\" + target.id)
 
     def running_apps(self, catalog):
         """[(Target, [window titles])] for apps with windows open. Each window belongs to

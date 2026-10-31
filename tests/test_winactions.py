@@ -30,6 +30,14 @@ def test_catalog_lists_store_and_desktop_apps():
     assert {"Notepad", "File Explorer"} <= names
 
 
+def test_real_icons_for_an_app_and_a_folder(notepad, tmp_path):
+    import winactions
+    for source in (notepad, tmp_path):
+        im = winactions.icon_image(source, 32)
+        assert im.size == (32, 32)
+        assert im.getchannel("A").getextrema()[1] > 200  # something opaque was drawn
+
+
 def test_launch_then_switch_finds_the_running_window(notepad):
     import winactions
     a = winactions.Actions()

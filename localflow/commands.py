@@ -19,6 +19,7 @@ class Card:
     verb: str          # muted first line: "Opening"
     obj: str           # title line: "Spotify"
     icon: str = ""     # Target id, or "" for a glyph
+    kind: str = "done" # "done", "no_match" or "failed": picks the glyph, hold time and sound
 
 
 @dataclass(frozen=True)
@@ -84,13 +85,13 @@ def handle(heard, ctx):
             name = words[len(verb) + 1:]
             t = best_target(name, ctx.catalog)
             if not t:
-                return NoMatch(Card("No app called", name))
+                return NoMatch(Card("No app called", name, kind="no_match"))
             if ctx.actions.switch_to(t):
                 return Done(Card("Switching to", t.name, t.id))
             try:
                 ctx.actions.launch(t)
             except Exception as e:
                 ctx.log(f"Couldn't open {t.name}: {e!r}")
-                return Failed(Card("Couldn't open", t.name, t.id))
+                return Failed(Card("Couldn't open", t.name, t.id, "failed"))
             return Done(Card("Opening", t.name, t.id))
     return Dictation(heard)

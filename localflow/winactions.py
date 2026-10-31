@@ -99,6 +99,86 @@ def bring_forward(hwnd):
     user32.SetForegroundWindow(hwnd)
 
 
+# ------------------------------------------------------------------ icons
+# The same icon the Start menu or Explorer shows, asked from the Windows shell
+# (IShellItemImageFactory), so every installed app, folder and drive looks native.
+
+class _GUID(ctypes.Structure):
+    _fields_ = [("d1", ctypes.c_ulong), ("d2", ctypes.c_ushort), ("d3", ctypes.c_ushort), ("d4", ctypes.c_ubyte * 8)]
+
+
+class _SIZE(ctypes.Structure):
+    _fields_ = [("cx", ctypes.c_long), ("cy", ctypes.c_long)]
+
+
+class _BITMAP(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_long), ("w", ctypes.c_long), ("h", ctypes.c_long), ("wb", ctypes.c_long),
+                ("planes", ctypes.c_ushort), ("bpp", ctypes.c_ushort), ("bits", ctypes.c_void_p)]
+
+
+class _BIH(ctypes.Structure):
+    _fields_ = [("size", ctypes.c_uint32), ("w", ctypes.c_long), ("h", ctypes.c_long), ("planes", ctypes.c_ushort),
+                ("bpp", ctypes.c_ushort), ("comp", ctypes.c_uint32), ("img", ctypes.c_uint32), ("xp", ctypes.c_long),
+                ("yp", ctypes.c_long), ("used", ctypes.c_uint32), ("imp", ctypes.c_uint32)]
+
+
+ole32, shell32, gdi32 = ctypes.windll.ole32, ctypes.windll.shell32, ctypes.windll.gdi32
+shell32.SHCreateItemFromParsingName.argtypes = [wt.LPCWSTR, ctypes.c_void_p, ctypes.POINTER(_GUID), ctypes.POINTER(ctypes.c_void_p)]
+gdi32.GetObjectW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+gdi32.GetDIBits.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint]
+gdi32.DeleteObject.argtypes = [ctypes.c_void_p]
+user32.GetDC.restype = ctypes.c_void_p
+user32.ReleaseDC.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+_IID_IMAGE_FACTORY = _GUID()
+ole32.CLSIDFromString("{bcc18b79-ba16-442f-80c4-8a59c30c463b}", ctypes.byref(_IID_IMAGE_FACTORY))
+_GetImage = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, _SIZE, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p))
+_Release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)
+
+
+def shell_path(target_or_path):
+    """What the shell parses: an installed app's AppsFolder entry, or a file/folder path."""
+    if isinstance(target_or_path, Target):
+        return "shell:AppsFolder\\" + target_or_path.id
+    return str(target_or_path)
+
+
+def icon_image(target_or_path, size):
+    """The shell's icon as a PIL RGBA image (straight alpha), or None."""
+    from PIL import Image
+    import numpy as np
+    ole32.CoInitialize(None)
+    obj = ctypes.c_void_p()
+    if shell32.SHCreateItemFromParsingName(shell_path(target_or_path), None, ctypes.byref(_IID_IMAGE_FACTORY),
+                                          ctypes.byref(obj)) != 0 or not obj:
+        return None
+    vtbl = ctypes.cast(ctypes.cast(obj, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
+    hbmp = ctypes.c_void_p()
+    try:
+        # SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY: the icon, never a thumbnail of the content
+        if _GetImage(vtbl[3])(obj, _SIZE(size, size), 0x1 | 0x4, ctypes.byref(hbmp)) != 0:
+            return None
+    except OSError:
+        return None
+    finally:
+        _Release(vtbl[2])(obj)
+    try:
+        bm = _BITMAP()
+        gdi32.GetObjectW(hbmp, ctypes.sizeof(bm), ctypes.byref(bm))
+        w, h = bm.w, abs(bm.h)
+        bih = _BIH(ctypes.sizeof(_BIH), w, -h, 1, 32, 0, 0, 0, 0, 0, 0)  # top-down BGRA
+        buf = ctypes.create_string_buffer(w * h * 4)
+        dc = user32.GetDC(None)
+        gdi32.GetDIBits(dc, hbmp, 0, h, buf, ctypes.byref(bih), 0)
+        user32.ReleaseDC(None, dc)
+    finally:
+        gdi32.DeleteObject(hbmp)
+    a = np.frombuffer(buf.raw, np.uint8).reshape(h, w, 4)[:, :, [2, 1, 0, 3]].astype(np.float32)
+    alpha = a[:, :, 3:4]
+    a[:, :, :3] = np.where(alpha > 0, np.minimum(255, a[:, :, :3] * 255 / np.maximum(alpha, 1)), 0)  # un-premultiply
+    im = Image.fromarray(a.astype(np.uint8), "RGBA")
+    return im if im.size == (size, size) else im.resize((size, size), Image.LANCZOS)
+
+
 class Actions:
     def switch_to(self, target):
         wins = windows_of(target)

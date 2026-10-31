@@ -1260,6 +1260,7 @@ def init_fonts(root):
         "heading": (strong, 10),          # group headings, in muted
         "subtitle": (strong, 11),         # popup titles
         "title": (display, 16),           # page titles
+        "command": (display, 11),         # --text-command: the object line of the command card
         "stat": (display, 16),            # stats corner numbers
         "icon": (pick("Segoe Fluent Icons", "Segoe MDL2 Assets"), 11),
         "icon_small": (pick("Segoe Fluent Icons", "Segoe MDL2 Assets"), 9),
@@ -1935,6 +1936,7 @@ class Overlay:
         self.key_text = key_text
         self.hover = False  # the hover bar is showing in the pill's place
         self.listening = False  # wake word mode is on
+        self.command_mode = False  # a hands-free turn that may be a Command: ice-blue wave
         self.finish_hint = None
         self.scale = S
         self.win = tk.Toplevel(root)
@@ -1973,11 +1975,11 @@ class Overlay:
         pill(self.canvas, x0, y0, x0 + w, y0 + h, fill or T["surface"], T["popup_border"], T["edge_glow"])
         return x0, y0, x0 + w, y0 + h
 
-    def _wave(self, x, cy):
+    def _wave(self, x, cy, color=None):
         for i, lv in enumerate(self.levels):
             bh = max(px(2), min(1.0, (lv / 0.06) ** 0.6) * px(22))
             self.canvas.create_rectangle(x + i * px(5), cy - bh / 2, x + i * px(5) + px(2.5),
-                                         cy + bh / 2, fill=T["text"], outline="")
+                                         cy + bh / 2, fill=color or T["text"], outline="")
 
     def _rec_dot(self, x, cy):
         dot(self.canvas, x, cy, px(4 + 1.5 * np.sin(self.tick / 4)), T["recording"])
@@ -2009,8 +2011,11 @@ class Overlay:
             tw = tkfont.Font(font=F["caption"]).measure(hint)
             x0, y0, x1, y1 = self._pill(px(200) + tw + px(14), px(40))
             cy = (y0 + y1) / 2
-            self._rec_dot(x0 + px(18), cy)
-            self._wave(x0 + px(34), cy)
+            if self.command_mode:  # --color-command, no red dot: this isn't (yet) dictation
+                self._wave(x0 + px(26), cy, T["accent"])
+            else:
+                self._rec_dot(x0 + px(18), cy)
+                self._wave(x0 + px(34), cy)
             c.create_text(x0 + px(186), cy, text=hint, fill=T["muted"], font=F["caption"], anchor="w")
             return
 
@@ -2213,6 +2218,109 @@ class HoverBar:
     def _park(self):
         if not self.visible:
             self.win.geometry("+-20000+-20000")
+
+
+class CommandCard:
+    """What a Command did: the app's real icon, a muted verb and the object ("Opening" /
+    "Spotify"). Rises out of the pill (the pill sits on the taskbar, so the card goes
+    above it), holds, and stays while you point at it. Never takes focus."""
+
+    ICON, PAD, GAP = 32, 12, 12          # --size-command-icon, --space-3
+    MIN_W, MAX_W, H = 200, 300, 56       # --command-card-min / -max
+    HOLD = {"done": 1.6, "no_match": 2.4, "failed": 2.4}  # --duration-command-hold / -miss
+    EXIT = 150                           # --duration-exit
+
+    def __init__(self, app):
+        self.app = app
+        self.win = tk.Toplevel(app.root)
+        self.win.overrideredirect(True)
+        self.win.attributes("-topmost", True, "-transparentcolor", KEY, "-alpha", 0.0)
+        self.canvas = tk.Canvas(self.win, bg=KEY, highlightthickness=0)
+        self.canvas.pack()
+        self.win.geometry("1x1+-20000+-20000")
+        self.win.update_idletasks()
+        set_ex_style(self.win, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+        self.hovered = False
+        self.canvas.bind("<Enter>", lambda e: setattr(self, "hovered", True))
+        self.canvas.bind("<Leave>", lambda e: self._leave())
+        self.until, self.job = 0, None
+        self.show_t = Tween(self.canvas, self._place)  # 0 hidden (lower, clear) .. 1 shown
+        self.icons = {}
+
+    def _icon(self, card):
+        """The app's icon on the card surface, or a glyph on a control tile."""
+        size = px(self.ICON)
+        if card.icon:
+            if card.icon not in self.icons:
+                im = None
+                try:
+                    im = winactions.icon_image(next(t for t in self.app.commands.catalog if t.id == card.icon), size)
+                except Exception as e:
+                    log("Icon failed:", repr(e))
+                if im is not None:
+                    bg = Image.new("RGBA", im.size, rgb(T["surface"]) + (255,))
+                    self.icons[card.icon] = ImageTk.PhotoImage(Image.alpha_composite(bg, im))
+                else:
+                    self.icons[card.icon] = None
+            if self.icons[card.icon]:
+                return self.icons[card.icon], None
+        ch = {"no_match": "", "failed": ""}.get(card.kind, "")
+        return shape(size, size, px(RADIUS["control"]), T["control"]), ch
+
+    def show(self, card):
+        c = self.canvas
+        verb_f, obj_f = tkfont.Font(font=F["caption"]), tkfont.Font(font=F["command"])
+        text_x = px(self.PAD + self.ICON + self.GAP)
+        w = text_x + max(verb_f.measure(card.verb), obj_f.measure(card.obj)) + px(16)
+        self.w, self.h = max(px(self.MIN_W), min(px(self.MAX_W), w)), px(self.H)
+        c.config(width=self.w, height=self.h)
+        clear(c)
+        put(c, 0, 0, shape(self.w, self.h, px(RADIUS["card"]), T["surface"], T["popup_border"], 1, T["edge_glow"]))
+        img, ch = self._icon(card)
+        cy, ix = self.h / 2, px(self.PAD) + px(self.ICON) / 2
+        put(c, ix, cy, img, anchor="center")
+        if ch:
+            icon(c, ix, cy, ch, T["dim"], 12)
+        maxw = self.w - text_x - px(self.PAD)
+        c.create_text(text_x, cy - px(9), text=card.verb, fill=T["muted"], font=F["caption"], anchor="w")
+        obj = card.obj
+        while obj_f.measure(obj) > maxw and len(obj) > 2:
+            obj = obj[:-2] + "…"
+        c.create_text(text_x, cy + px(8), text=obj, fill=T["text"], font=F["command"], anchor="w")
+        ov = self.app.overlay
+        self.x = ov.x + ov.w // 2 - self.w // 2
+        self.y = ov.y + ov.h - px(4) - px(40) - px(SPACE[2]) - self.h  # just above the pill
+        self.hovered = False
+        self.show_t.to(1, MOTION["enter"])
+        self.until = time.time() + self.HOLD.get(card.kind, 1.6)
+        self._schedule()
+
+    def _place(self, k):
+        rise = px(MOTION["rise"]) * (1 - k)
+        self.win.geometry(f"{self.w}x{self.h}+{self.x}+{round(self.y + rise)}")
+        self.win.attributes("-alpha", 0.97 * k)
+        if k <= 0:
+            self.win.geometry("+-20000+-20000")
+
+    def _schedule(self):
+        if self.job:
+            self.canvas.after_cancel(self.job)
+        self.job = self.canvas.after(100, self._check)
+
+    def _check(self):
+        self.job = None
+        if self.hovered or time.time() < self.until:
+            self._schedule()
+        else:
+            self.hide()
+
+    def _leave(self):
+        self.hovered = False
+        self.until = max(self.until, time.time() + 0.8)
+
+    def hide(self):
+        if self.show_t.target != 0:
+            self.show_t.to(0, self.EXIT, ease_colour)
 
 
 # ---------------------------------------------------------------- popup windows
@@ -3047,6 +3155,7 @@ class App:
         self.overlay = Overlay(self.root, self.cfg["show_idle_pill"], key_label(self.cfg["hold_keys"]))
         self.overlay.set("message", "Loading speech model…")
         self.bar = HoverBar(self)
+        self.card = CommandCard(self)
         self.last_tick = time.time()
         self.last_area_check = 0
         self.area = self._area()
@@ -3083,8 +3192,12 @@ class App:
             return False
         card = out.card
         log(f"Command: {text!r} -> {type(out).__name__} {card.verb} {card.obj}")
-        secs = 1.6 if isinstance(out, commands.Done) else 2.4
-        self.post("overlay", "message", f"{card.verb} {card.obj}", secs)
+        if card.kind == "done":
+            self._beep(1320, 30)   # soft tick
+        else:
+            self._beep(330, 140)   # low tone: a miss, not an error
+        self.post("overlay", "idle")
+        self.post("card", card)
         return True
 
     # -- background events -> UI thread
@@ -3117,6 +3230,7 @@ class App:
             self.overlay.set("message", "Starting mic…")
         self.overlay.listening = self.ambient.running and self.ambient.mic is not None
         self.overlay.finish_hint = "Pause to finish" if self.wake_session else None
+        self.overlay.command_mode = self.wake_session and self.cfg["commands_enabled"]
         if self.session and self.wake_session:
             quiet = now - self.last_voice
             if getattr(self, "wake_heard_voice", False) and quiet > self.cfg["ambient_end_silence"]:
@@ -3154,7 +3268,8 @@ class App:
         overlay.levels = old_overlay.levels
         self.overlay = overlay
         self.bar = HoverBar(self)
-        for w in (old_overlay.win, old_bar.win):
+        old_card, self.card = self.card, CommandCard(self)
+        for w in (old_overlay.win, old_bar.win, old_card.win):
             try:
                 w.destroy()
             except Exception:
@@ -3213,15 +3328,18 @@ class App:
     def _ui_overlay(self, state, text="", seconds=0):
         self.overlay.set(state, text, seconds)
 
+    def _ui_card(self, card):
+        self.card.show(card)
+
     def _ui_level(self, level):
         self.overlay.push_level(level)
 
     def _ui_call(self, fn):
         fn()
 
-    def _beep(self, freq):
+    def _beep(self, freq, ms=50):
         if self.cfg["sounds"]:
-            threading.Thread(target=winsound.Beep, args=(freq, 50), daemon=True).start()
+            threading.Thread(target=winsound.Beep, args=(freq, ms), daemon=True).start()
 
     def set_option(self, key, value):
         self.cfg[key] = value

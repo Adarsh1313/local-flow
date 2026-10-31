@@ -63,7 +63,7 @@ back the "Hey Cortana" feeling: say it, see it happen, no chat window.
    (ice blue), no red dot, so it reads as "command". No card yet.
 2. **Thinking** (v2 AI fallback only, 1–3 s): one ice-blue dot breathing at
    `--duration-breathe`. Never a spinner.
-3. **Result card** below the pill: surface, radius-card, lit top edge, `--shadow-float`
+3. **Result card** above the pill (the pill sits on the taskbar), rising out of it: surface, radius-card, lit top edge, `--shadow-float`
    (it floats). Width `--command-card-min` to `--command-card-max`, fits its text.
    - Left: the app's real icon at `--size-command-icon`; no app → a Segoe Fluent
      glyph on a `--color-control` tile, `--radius-control`.
@@ -143,7 +143,6 @@ the wake word" switch · Routines · Names · What you can say.
 - Don't animate for its own sake: if a motion isn't in the table above, it needs a reason.
 
 ## Open questions / extend here
-- Command card above the pill when the pill sits low on screen? Decide when building.
 - Success / no-match tones: pick or make two (short, quiet, no melody).
 - The General page's "Voice commands" switch ("new line") clashes with Commands:
   rename it, e.g. "Spoken formatting".

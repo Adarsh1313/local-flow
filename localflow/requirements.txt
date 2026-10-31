@@ -17,3 +17,4 @@ pycaw
 # GPU (NVIDIA) support for faster-whisper
 nvidia-cublas-cu12
 nvidia-cudnn-cu12==9.*
+text2num>=2.5

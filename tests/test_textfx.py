@@ -59,3 +59,41 @@ def test_swap_sources_apply_in_order():
 
     assert postprocess("I use cloud code.", PLAIN, [Swap("cloud", "Claude"), Swap("Claude", "X")]) == \
         "I use X code."
+
+
+# -- numbers
+
+def test_years_become_digits():
+    assert postprocess("In twenty twenty six we grow.") == "In 2026 we grow."
+
+
+def test_money_and_percentages():
+    assert postprocess("I'm on the twenty dollar plan.") == "I'm on the $20 plan."
+    assert postprocess("It costs five dollars, fifty percent off.") == "It costs $5, 50% off."
+
+
+def test_times():
+    assert postprocess("Meet at three thirty.") == "Meet at 3:30."
+
+
+def test_ten_and_above_become_digits():
+    assert postprocess("Twenty five people came.") == "25 people came."
+
+
+def test_big_round_numbers_read_naturally():
+    assert postprocess("We have five million users and twenty five thousand teams.") == \
+        "We have 5 million users and 25,000 teams."
+
+
+def test_small_numbers_stay_words_in_prose():
+    for text in ("I have one question and two concerns.", "We need three apples."):
+        assert postprocess(text) == text
+
+
+def test_numbers_switched_off():
+    assert postprocess("Twenty five people came.", Options(numbers=False)) == "Twenty five people came."
+
+
+def test_numbers_inside_a_list_are_not_list_markers():
+    assert postprocess("One, buy twenty apples. Two, call the bank.") == \
+        "1. Buy 20 apples\n2. Call the bank"

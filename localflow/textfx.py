@@ -155,6 +155,53 @@ def format_lists(text):
     return "\n".join(lines)
 
 
+# ------------------------------------------------------------------ numbers
+#
+# Spoken numbers are written the way people type them: "twenty twenty six" -> 2026,
+# "the twenty dollar plan" -> "the $20 plan", "fifty percent" -> 50%, "at three thirty"
+# -> 3:30, "twenty five" -> 25. One to nine stay words in prose ("one question"),
+# except in amounts and times.
+
+SMALL = r"one|two|three|four|five|six|seven|eight|nine"
+# "five dollars": small numbers in amounts become digits too
+_SMALL_UNIT = re.compile(rf"\b({SMALL})(?=\s+(?:dollars?|bucks|percent|per\s+cent|rupees?)\b)", re.I)
+# "at three thirty": the hour of a time
+_SMALL_TIME = re.compile(rf"\b(at|by|around|until|till|from|before|after)\s+({SMALL})(?=\s+(?:o'?\s?clock|"
+                         r"(?:twenty|thirty|forty|fifty|fifteen|ten|oh)\b))", re.I)
+_YEAR = re.compile(r"\b(19|20)\s(\d{2})\b")
+_TIME = re.compile(r"\b(at|by|around|until|till|from|before|after)\s(\d{1,2})\s(?:oh\s)?([0-5]\d)\b", re.I)
+_DOLLARS = re.compile(r"\b(\d[\d,.]*)\s(?:dollars?|bucks)\b", re.I)
+_RUPEES = re.compile(r"\b(\d[\d,.]*)\s(?:rupees?)\b", re.I)
+_PERCENT = re.compile(r"\b(\d[\d.]*)\s(?:percent|per\scent)\b", re.I)
+_BIG = re.compile(r"\b(\d+(?:\.\d+)?)(?:\s(1000000000|1000000)|(000000000|000000))\b")
+_THOUSANDS = re.compile(r"\b\d{5,}\b")
+
+
+def _digit_word(m):
+    from text_to_num import text2num
+    return str(text2num(m.group(1).lower(), "en"))
+
+
+def numbers_to_digits(text):
+    from text_to_num import alpha2digit
+    text = _SMALL_UNIT.sub(_digit_word, text)
+    text = _SMALL_TIME.sub(lambda m: f"{m.group(1)} {_digit_word(re.match(r'(\w+)', m.group(2)))}", text)
+    text = alpha2digit(text, "en", threshold=10)
+    text = _YEAR.sub(r"\1\2", text)
+    text = _TIME.sub(r"\1 \2:\3", text)
+    text = _DOLLARS.sub(r"$\1", text)
+    text = _RUPEES.sub("₹\\1", text)
+    text = _PERCENT.sub(r"\1%", text)
+
+    def big(m):
+        scale = m.group(2) or ("1" + m.group(3))
+        word = "billion" if len(scale) == 10 else "million"
+        return f"{m.group(1)} {word}"
+    text = _BIG.sub(big, text)
+    text = re.sub(r"\ba\s(100|1000)\b", r"\1", text)   # "a hundred people" -> "100 people"
+    return _THOUSANDS.sub(lambda m: f"{int(m.group()):,}", text)
+
+
 @dataclass(frozen=True)
 class Options:
     """What postprocess does, taken from the settings."""
@@ -182,6 +229,8 @@ def postprocess(text, options=Options(), swaps=()):
     if options.voice_commands:
         text = re.sub(r"[,.]?\s*\bnew paragraph\b[,.]?\s*", "\n\n", text, flags=re.I)
         text = re.sub(r"[,.]?\s*\bnew line\b[,.]?\s*", "\n", text, flags=re.I)
+    if options.numbers:
+        text = numbers_to_digits(text)
     if options.lists:
         text = format_lists(text)
     return text.strip()

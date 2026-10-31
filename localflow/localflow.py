@@ -83,6 +83,7 @@ DEFAULTS = {
     "voice_commands": True,         # "new line", "new paragraph"
     "remove_fillers": True,         # drop "um", "uh"
     "smart_lists": True,            # "one, two, three" / "next point" become a list
+    "smart_numbers": True,          # "twenty twenty six" -> 2026, "five dollars" -> $5
     "llm_cleanup": False,
     "ollama_model": "qwen2.5:3b",
     "sounds": True,
@@ -3007,6 +3008,7 @@ class Panel(Popup):
         self._switch(row(b, "Remove filler words", 'Drops "um" and "uh"'), "remove_fillers")
         self._switch(row(b, "Spoken formatting", 'Say "new line" or "new paragraph"'), "voice_commands")
         self._switch(row(b, "Lists", 'Say "one… two…" or "next point…" to make a list'), "smart_lists")
+        self._switch(row(b, "Numbers", "Writes 2026, $20, 50% and 3:30 as digits"), "smart_numbers")
         self._switch(row(b, "Learn from my fixes", "Adds names you correct to the dictionary"),
                      "learn_corrections")
         self._switch(row(b, "AI cleanup", "Fixes grammar with Ollama · adds 1–3 s"), "llm_cleanup")

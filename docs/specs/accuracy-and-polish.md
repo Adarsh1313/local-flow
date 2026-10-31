@@ -249,7 +249,7 @@ After daily use of LocalFlow, a handful of rough edges make it feel worse than W
 - [x] 3. Spoken lists without punctuation, and "then" after a pause, via `Transcript` pauses
 - [x] 4. Move `Dictionary` into a pure module with learn outcomes and the new rules; re-check `off` entries
 - [x] 5. Fix feedback card, and "Not applied" on the Dictionary page
-- [ ] 6. Starter words module, five groups, group switches on the Dictionary page
+- [x] 6. Starter words module, five groups, group switches on the Dictionary page
 - [ ] 7. Real-transparency rendering for the pill, hover bar and Command card
 - [ ] 8. `WakeDetector` with openWakeWord "hey jarvis", fallback, sensitivity and wake-word mic picker
 - [ ] 9. Training recordings: size display, "Delete all", clips module and test

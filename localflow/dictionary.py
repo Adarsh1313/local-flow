@@ -74,25 +74,28 @@ def describe(outcome):
 # ------------------------------------------------------------------ swapping
 
 def swap(text, entries):
-    """Swap each entry's `heard` for its `wanted` (longest first), by its mode."""
-    for e in sorted(entries, key=lambda e: -len(e["heard"])):
-        mode = e.get("mode", "always")
-        if mode not in ("always", "context"):
-            continue
-        pattern = r"(?<!\w)" + re.escape(e["heard"]) + r"(?!\w)"
-        if mode == "always":
-            text = re.sub(pattern, lambda m, w=e["wanted"]: w, text, flags=re.I)
-            continue
-        ctx = set(e.get("context", []))
+    """Swap each entry's `heard` for its `wanted`, by its mode, in one pass: the longest
+    heard form wins, and swapped-in words are never swapped again."""
+    found = {}
+    for e in entries:
+        if e.get("mode", "always") in ("always", "context"):
+            found.setdefault(" ".join(e["heard"].lower().split()), e)
+    if not found:
+        return text
+    heard = sorted(found, key=len, reverse=True)
+    pattern = r"(?<!\w)(?:" + "|".join(re.escape(h).replace(r"\ ", r"\s+") for h in heard) + r")(?!\w)"
 
-        def near(m, w=e["wanted"], ctx=ctx):
+    def one(m):
+        e = found[" ".join(m.group(0).lower().split())]
+        if e.get("mode", "always") == "context":
             left = re.search(r"([\w'-]+)\W*$", m.string[:m.start()])
             right = re.match(r"\W*([\w'-]+)", m.string[m.end():])
             words = {g.group(1).lower() for g in (left, right) if g}
-            return w if words & ctx else m.group(0)
+            if not words & set(e.get("context", [])):
+                return m.group(0)
+        return e["wanted"]
 
-        text = re.sub(pattern, near, text, flags=re.I)
-    return text
+    return re.sub(pattern, one, text, flags=re.I)
 
 
 class Dictionary:

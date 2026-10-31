@@ -130,3 +130,24 @@ def test_then_after_a_pause_with_no_list_stays_prose():
 def test_pause_split_parts_join_into_one_sentence():
     said = Transcript(("I think we should.", "go to the park."), (0.0, 0.8))
     assert postprocess(said) == "I think we should go to the park."
+
+
+# -- Starter words
+
+def test_starter_words_group_switch_changes_the_output():
+    from starter import StarterWords
+    assert postprocess("I asked chat gpt.", PLAIN, [StarterWords()]) == "I asked ChatGPT."
+    assert postprocess("I asked chat gpt.", PLAIN, [StarterWords({"tech": False})]) == "I asked chat gpt."
+
+
+def test_your_dictionary_wins_over_starter_words(tmp_path):
+    from dictionary import Dictionary
+    from starter import StarterWords
+    mine = Dictionary(tmp_path / "dictionary.json")
+    mine.add("chat gpt", "Chat GPT")
+    assert postprocess("I asked chat gpt.", PLAIN, [mine, StarterWords(yours=mine)]) == "I asked Chat GPT."
+
+
+def test_spoken_shorthand_is_written_short():
+    from starter import StarterWords
+    assert postprocess("L G T M, ship it.", PLAIN, [StarterWords()]) == "LGTM, ship it."

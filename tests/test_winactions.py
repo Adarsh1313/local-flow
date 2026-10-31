@@ -104,10 +104,12 @@ def test_running_apps_minimise_and_close(notepad):
     assert wait_for(lambda: not winactions.windows_of(notepad))
 
 
-def test_commands_settings_pages_build_offscreen():
+def test_commands_settings_pages_build_offscreen(tmp_path):
     import tkinter as tk
     import commands
+    import dictionary
     import localflow
+    import starter
     import winactions
 
     root = tk.Tk()
@@ -122,6 +124,10 @@ def test_commands_settings_pages_build_offscreen():
     app.cfg = dict(localflow.DEFAULTS)
     spotify = commands.Target("spotify", "Spotify")
     app.commands = commands.Context([spotify], winactions.Actions(), aliases=[commands.Alias("music", "spotify")])
+    app.dictionary = dictionary.Dictionary(tmp_path / "dictionary.json")
+    app.dictionary.learn("patch", "batch", [])
+    app.starter = starter.StarterWords(yours=app.dictionary)
+    app.set_starter_group = lambda key, on: None
     app.restart = app.quit = app.refresh_commands = lambda: None
     app.set_option = lambda key, value: app.cfg.__setitem__(key, value)
     app.panel_leave = 1.0
@@ -149,6 +155,9 @@ def test_commands_settings_pages_build_offscreen():
         panel._show_commands_view("add")
         root.update_idletasks()
         assert panel.page_title.cget("text") == "Add a name"
+        panel.open_tab("Dictionary")
+        root.update_idletasks()
+        assert panel.page_title.cget("text") == "Dictionary"
     finally:
         if panel.win.winfo_exists():
             panel.win.destroy()

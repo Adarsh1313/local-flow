@@ -65,6 +65,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 import commands
 import dictionary
+import starter
 import textfx
 import winactions
 from dictionary import Dictionary, extract_corrections, find_span
@@ -85,6 +86,7 @@ DEFAULTS = {
     "voice_commands": True,         # "new line", "new paragraph"
     "remove_fillers": True,         # drop "um", "uh"
     "smart_lists": True,            # "one, two, three" / "next point" become a list
+    "starter_groups": {},            # Starter words groups switched off: {"india": False}
     "smart_numbers": True,          # "twenty twenty six" -> 2026, "five dollars" -> $5
     "llm_cleanup": False,
     "ollama_model": "qwen2.5:3b",
@@ -2913,6 +2915,13 @@ class Panel(Popup):
                 Button(r, "Turn on everywhere", lambda h=e["heard"]: (d.set_mode(h, "always"), self.refresh()),
                        kind="subtle", font=F["caption"]).pack(side="right")
 
+        b = group(p, "Starter words", "Built-in names and terms the speech model often gets wrong. "
+                                      "Your own words above win when both know a word.")
+        for key, (title, _) in starter.GROUPS.items():
+            r = row(b, title, f"{len(starter.PARSED[key][1])} words")
+            self._switch(r, None, lambda k=key: self.app.starter.enabled[k],
+                         lambda v, k=key: self.app.set_starter_group(k, v))
+
     def _add_word(self):
         heard, wanted = self.heard_in.entry.get().strip(), self.wanted_in.entry.get().strip()
         if heard and wanted:
@@ -3381,6 +3390,7 @@ class App:
             self.cfg["startup_default_applied"] = True
             save_config(self.cfg)
         self.dictionary = Dictionary(DICT_PATH)
+        self.starter = starter.StarterWords(self.cfg["starter_groups"], yours=self.dictionary)
         self.mics = Mics()
         self.mic = None            # the open MicStream, kept ready between dictations
         self.ambient = AmbientListener(self)
@@ -3746,6 +3756,10 @@ class App:
         if self.cfg["sounds"]:
             threading.Thread(target=winsound.Beep, args=(freq, ms), daemon=True).start()
 
+    def set_starter_group(self, key, on):
+        self.starter.enabled[key] = on
+        self.set_option("starter_groups", {k: v for k, v in self.starter.enabled.items() if not v})
+
     def set_option(self, key, value):
         self.cfg[key] = value
         save_config(self.cfg)
@@ -3768,7 +3782,7 @@ class App:
         try:
             t = time.time()
             self.engine = Engine(self.cfg)
-            self.engine.vocab = lambda: self.cfg["vocabulary"] + self.dictionary.words()
+            self.engine.vocab = lambda: self.cfg["vocabulary"] + self.dictionary.words() + self.starter.words()
             log(f"Loaded {self.engine.name} in {time.time() - t:.1f}s")
             if self.cfg["ambient_mode"]:
                 self.ambient.start()
@@ -4066,7 +4080,8 @@ class App:
                     said = llm_cleanup(text, self.cfg)
                 except Exception as e:
                     log("Cleanup skipped:", repr(e))
-            text = textfx.postprocess(said, textfx.Options.from_cfg(self.cfg), [self.dictionary])
+            text = textfx.postprocess(said, textfx.Options.from_cfg(self.cfg),
+                                      [self.dictionary, self.starter])
             log(f"[{session.duration:.1f}s audio, {asr_time:.2f}s asr, "
                 f"{time.time() - t:.2f}s total] {text!r}")
             if not text:

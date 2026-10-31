@@ -118,6 +118,9 @@ class Dictionary:
             if e.get("rules", 1) < RULES:
                 if e["mode"] == "off" and e.get("source") == "learned" and not e.get("muted"):
                     mode = self._mode(e["heard"], e["wanted"], e.get("context", []), e.get("count", 1))
+                    if mode == "always" and is_common(e["heard"]) and e.get("count", 1) < 2:
+                        # never seen on a card: don't start swapping an everyday word everywhere
+                        mode = "context" if e.get("context") else "off"
                     e["mode"] = mode if mode != "waiting" else "off"
                 e["rules"] = RULES
                 changed = True

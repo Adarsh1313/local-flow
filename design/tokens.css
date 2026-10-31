@@ -82,4 +82,11 @@
   --size-confirm-icon: 24px; /* app icons in the "Close 6 apps?" row */
   --duration-confirm-wait: 6000ms; /* silence that cancels a confirmation */
   --size-row-icon: 20px;     /* app/folder icons in Commands settings rows */
+  --command-card-height: 56px; /* the one-line-pair command card */
+  --size-button: 28px;       /* Close / Cancel in the confirmation card */
+  --size-count-badge: 14px;  /* window-count capsule on a confirmation icon */
+  --command-tip-max: 240px;  /* widest window-title tip */
+  --pill-height: 40px;       /* the active pill; the command card sits above it */
+  --pill-inset: 4px;         /* gap between the pill and the bottom of its window */
+  --opacity-float: .97;      /* the pill and the command card */
 }

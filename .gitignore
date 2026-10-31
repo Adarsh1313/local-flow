@@ -17,3 +17,4 @@ localflow/last_recording.wav
 localflow/training/
 localflow/*.tmp
 localflow/@AutomationLog.txt
+.panel-tests/

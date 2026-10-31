@@ -352,5 +352,22 @@ def test_suggested_routines_need_their_apps_and_stay_dismissed():
     assert all(r.suggested for r in got)
 
 
+def test_media_or_volume_with_an_unknown_target_is_a_no_match_not_dictation():
+    actions = FakeActions()
+    out = handle("play blender thing", ctx(actions))
+    assert isinstance(out, NoMatch) and (out.card.verb, out.card.obj) == ("No app called", "blender thing")
+    out = handle("volume banana", ctx(actions))
+    assert isinstance(out, NoMatch) and (out.card.verb, out.card.obj) == ("No volume", "banana")
+    assert actions.calls == []
+
+
+def test_a_folder_alias_answers_to_name_folder_too():
+    projects = Target("folder:user:projects", "Projects", "folder", r"C:\Users\me\projects")
+    c = ctx(catalog=(SPOTIFY, projects))
+    c.aliases = [Alias("projects", projects.id)]
+    assert handle("open projects folder", c).card.obj == "Projects"
+    assert handle("Projects folder.", c).card.obj == "Projects"
+
+
 def test_speech_without_a_command_word_is_dictation():
     assert handle("Remind the team about Friday", ctx()) == Dictation("Remind the team about Friday")

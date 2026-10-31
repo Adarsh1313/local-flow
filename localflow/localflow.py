@@ -1259,7 +1259,13 @@ T = {
 KEY = "#010203"  # transparent colour key for the pill and the hover bar
 SPACE = {1: 4, 2: 8, 3: 12, 4: 16, 5: 20, 6: 24}
 RADIUS = {"chip": 6, "control": 8, "card": 12}
-MOTION = {"hover": 120, "move": 200, "enter": 220, "confirm": 1400, "rise": 8}
+MOTION = {"hover": 120, "move": 200, "enter": 220, "confirm": 1400, "rise": 8,
+          "exit": 150, "command_hold": 1600, "command_miss": 2400, "confirm_wait": 6000}
+# Command mode sizes (--size-command-icon, --command-card-*, --size-confirm-icon, ...)
+COMMAND = {"icon": 32, "confirm_icon": 24, "row_icon": 20, "card_min": 200, "card_max": 300, "card_h": 56,
+           "button_h": 28, "tip_max": 240, "pill_h": 40, "pill_inset": 4, "badge": 14}
+FLOAT_ALPHA = 0.97   # --opacity-float: the pill and the command card
+TONES = {"wake": ((660, 70), (990, 110)), "success": (1320, 30), "miss": (330, 140)}  # (Hz, ms)
 F = {}           # fonts, filled by init_fonts()
 S = 1.0          # display scale (125% -> 1.25)
 
@@ -1968,7 +1974,7 @@ class Overlay:
         self.scale = S
         self.win = tk.Toplevel(root)
         self.win.overrideredirect(True)
-        self.win.attributes("-topmost", True, "-transparentcolor", KEY, "-alpha", 0.97)
+        self.win.attributes("-topmost", True, "-transparentcolor", KEY, "-alpha", FLOAT_ALPHA)
         w, h = px(self.W), px(self.H)
         self.canvas = tk.Canvas(self.win, width=w, height=h, bg=KEY, highlightthickness=0)
         self.canvas.pack()
@@ -2039,7 +2045,7 @@ class Overlay:
             x0, y0, x1, y1 = self._pill(px(200) + tw + px(14), px(40))
             cy = (y0 + y1) / 2
             if self.command_mode:  # --color-command, no red dot: this isn't (yet) dictation
-                self._wave(x0 + px(26), cy, T["accent"])
+                self._wave(x0 + px(SPACE[5]), cy, T["accent"])
             else:
                 self._rec_dot(x0 + px(18), cy)
                 self._wave(x0 + px(34), cy)
@@ -2247,15 +2253,33 @@ class HoverBar:
             self.win.geometry("+-20000+-20000")
 
 
+def above_pill_y(overlay, h):
+    """Top of a window of height h that sits just above the overlay's pill."""
+    return overlay.y + overlay.h - px(COMMAND["pill_inset"]) - px(COMMAND["pill_h"]) - px(SPACE[2]) - h
+
+
+def on_surface(im):
+    """An RGBA icon flattened onto the card surface (no fringe against the colour key)."""
+    bg = Image.new("RGBA", im.size, rgb(T["surface"]) + (255,))
+    return ImageTk.PhotoImage(Image.alpha_composite(bg, im))
+
+
+def fit_text(text, font, width):
+    """text, shortened with an ellipsis until it fits width."""
+    while font.measure(text) > width and len(text) > 2:
+        text = text[:-2] + "…"
+    return text
+
+
 class CommandCard:
     """What a Command did: the app's real icon, a muted verb and the object ("Opening" /
     "Spotify"). Rises out of the pill (the pill sits on the taskbar, so the card goes
     above it), holds, and stays while you point at it. Never takes focus."""
 
-    ICON, PAD, GAP = 32, 12, 12          # --size-command-icon, --space-3
-    MIN_W, MAX_W, H = 200, 300, 56       # --command-card-min / -max
-    HOLD = {"done": 1.6, "no_match": 2.4, "failed": 2.4}  # --duration-command-hold / -miss
-    EXIT = 150                           # --duration-exit
+    ICON, PAD, GAP = COMMAND["icon"], SPACE[3], SPACE[3]
+    MIN_W, MAX_W, H = COMMAND["card_min"], COMMAND["card_max"], COMMAND["card_h"]
+    HOLD = {"done": MOTION["command_hold"], "no_match": MOTION["command_miss"], "failed": MOTION["command_miss"]}
+    POLL = 100   # ms between checks while a card is up; none once it's hidden
 
     def __init__(self, app):
         self.app = app
@@ -2284,11 +2308,7 @@ class CommandCard:
                     im = winactions.icon_image(next(t for t in self.app.commands.catalog if t.id == card.icon), size)
                 except Exception as e:
                     log("Icon failed:", repr(e))
-                if im is not None:
-                    bg = Image.new("RGBA", im.size, rgb(T["surface"]) + (255,))
-                    self.icons[card.icon] = ImageTk.PhotoImage(Image.alpha_composite(bg, im))
-                else:
-                    self.icons[card.icon] = None
+                self.icons[card.icon] = on_surface(im) if im is not None else None
             if self.icons[card.icon]:
                 return self.icons[card.icon], None
         ch = card.glyph or {"no_match": "", "failed": ""}.get(card.kind, "")
@@ -2303,7 +2323,7 @@ class CommandCard:
             self._tip(None)
         verb_f, obj_f = tkfont.Font(font=F["caption"]), tkfont.Font(font=F["command"])
         text_x = px(self.PAD + self.ICON + self.GAP)
-        w = text_x + max(verb_f.measure(card.verb), obj_f.measure(card.obj)) + px(16)
+        w = text_x + max(verb_f.measure(card.verb), obj_f.measure(card.obj)) + px(SPACE[4])
         self.w, self.h = max(px(self.MIN_W), min(px(self.MAX_W), w)), px(self.H)
         c.config(width=self.w, height=self.h)
         clear(c)
@@ -2314,21 +2334,19 @@ class CommandCard:
         if ch:
             icon(c, ix, cy, ch, T["dim"], 12)
         maxw = self.w - text_x - px(self.PAD)
-        c.create_text(text_x, cy - px(9), text=card.verb, fill=T["muted"], font=F["caption"], anchor="w")
-        obj = card.obj
-        while obj_f.measure(obj) > maxw and len(obj) > 2:
-            obj = obj[:-2] + "…"
-        c.create_text(text_x, cy + px(8), text=obj, fill=T["text"], font=F["command"], anchor="w")
+        c.create_text(text_x, cy - px(SPACE[2]), text=card.verb, fill=T["muted"], font=F["caption"], anchor="w")
+        c.create_text(text_x, cy + px(SPACE[2]), text=fit_text(card.obj, obj_f, maxw), fill=T["text"],
+                      font=F["command"], anchor="w")
         ov = self.app.overlay
         self.x = ov.x + ov.w // 2 - self.w // 2
-        self.y = ov.y + ov.h - px(4) - px(40) - px(SPACE[2]) - self.h  # just above the pill
+        self.y = above_pill_y(ov, self.h)
         self.hovered = False
         self.show_t.to(1, MOTION["enter"])
-        self.until = time.time() + self.HOLD.get(card.kind, 1.6)
+        self.until = time.time() + self.HOLD.get(card.kind, MOTION["command_hold"]) / 1000
         self._schedule()
 
     # -- Confirmation: "Close 6 apps?", their icons, Cancel and a white Close button
-    CONFIRM_ICON, MAX_ICONS, BTN_H = 24, 6, 28   # --size-confirm-icon
+    CONFIRM_ICON, MAX_ICONS, BTN_H = COMMAND["confirm_icon"], 6, COMMAND["button_h"]
 
     def ask(self, asked, on_answer):
         c = self.canvas
@@ -2339,13 +2357,14 @@ class CommandCard:
         row_w = len(shown) * icon_px + (len(shown) - 1 + (1 if extra else 0)) * gap + (icon_px if extra else 0)
         title_f = tkfont.Font(font=F["command"])
         self.w = max(px(self.MIN_W), min(px(self.MAX_W) + px(40), 2 * pad + max(row_w, title_f.measure(asked.question))))
-        self.h = pad + px(20) + px(SPACE[3]) + icon_px + px(SPACE[3]) + px(self.BTN_H) + pad
+        self.title_h = title_f.metrics("linespace")
+        self.h = pad + self.title_h + px(SPACE[3]) + icon_px + px(SPACE[3]) + px(self.BTN_H) + pad
         c.config(width=self.w, height=self.h)
         self.regions = []   # (x0, y0, x1, y1, what)
         self._draw_ask()
         ov = self.app.overlay
         self.x = ov.x + ov.w // 2 - self.w // 2
-        self.y = ov.y + ov.h - px(4) - px(40) - px(SPACE[2]) - self.h
+        self.y = above_pill_y(ov, self.h)
         self.hovered = False
         self.until = float("inf")   # waits for an answer
         self.show_t.to(1, MOTION["enter"])
@@ -2358,18 +2377,19 @@ class CommandCard:
         clear(c)
         pad, icon_px, gap = px(SPACE[4]), px(self.CONFIRM_ICON), px(SPACE[2])
         put(c, 0, 0, shape(self.w, self.h, px(RADIUS["card"]), T["surface"], T["popup_border"], 1, T["edge_glow"]))
-        c.create_text(pad, pad + px(10), text=asked.question, fill=T["text"], font=F["command"], anchor="w")
-        y = pad + px(20) + px(SPACE[3])
+        c.create_text(pad, pad + self.title_h / 2, text=asked.question, fill=T["text"], font=F["command"], anchor="w")
+        y = pad + self.title_h + px(SPACE[3])
         self.regions = []
         x = pad
         for t, titles in asked.apps[:self.MAX_ICONS]:
             img = self._small_icon(t, icon_px)
             put(c, x, y, img or shape(icon_px, icon_px, px(RADIUS["chip"]), T["control"]))
             if len(titles) > 1:   # count badge: white capsule, bottom-right
-                bw = max(px(14), tkfont.Font(font=F["small"]).measure(str(len(titles))) + px(6))
-                bx, by = x + icon_px - bw + px(5), y + icon_px - px(9)
-                pill(c, bx, by, bx + bw, by + px(14), T["select"])
-                c.create_text(bx + bw / 2, by + px(7), text=str(len(titles)), fill=T["select_contrast"], font=F["small"])
+                bh = px(COMMAND["badge"])
+                bw = max(bh, tkfont.Font(font=F["small"]).measure(str(len(titles))) + px(SPACE[2]))
+                bx, by = x + icon_px - bw + px(SPACE[1]), y + icon_px - bh + px(SPACE[1])   # overhangs the corner
+                pill(c, bx, by, bx + bw, by + bh, T["select"])
+                c.create_text(bx + bw / 2, by + bh / 2, text=str(len(titles)), fill=T["select_contrast"], font=F["small"])
             self.regions.append((x, y, x + icon_px, y + icon_px, ("app", t, titles)))
             x += icon_px + gap
         extra = len(asked.apps) - self.MAX_ICONS
@@ -2402,8 +2422,7 @@ class CommandCard:
             except Exception as e:
                 log("Icon failed:", repr(e))
             if im is not None:
-                bg = Image.new("RGBA", im.size, rgb(T["surface"]) + (255,))
-                im = ImageTk.PhotoImage(Image.alpha_composite(bg, im))
+                im = on_surface(im)
             self.icons[key] = im
         return self.icons[key]
 
@@ -2452,8 +2471,8 @@ class CommandCard:
         head = t.name if kind == "app" else "Also closing"
         lines = titles[:4] + ([f"+{len(titles) - 4} more"] if len(titles) > 4 else [])
         f, hf = tkfont.Font(font=F["caption"]), tkfont.Font(font=F["caption"])
-        lines = [l if f.measure(l) < px(220) else l[:40] + "…" for l in lines]
-        w = min(px(240), max(f.measure(l) for l in [head] + lines) + px(SPACE[3]) * 2)
+        lines = [fit_text(l, f, px(COMMAND["tip_max"]) - px(SPACE[3]) * 2) for l in lines]
+        w = min(px(COMMAND["tip_max"]), max(f.measure(l) for l in [head] + lines) + px(SPACE[3]) * 2)
         lh = px(16)
         h = px(SPACE[2]) * 2 + lh * (1 + len(lines))
         c = self.tipcanvas
@@ -2468,14 +2487,14 @@ class CommandCard:
     def _place(self, k):
         rise = px(MOTION["rise"]) * (1 - k)
         self.win.geometry(f"{self.w}x{self.h}+{self.x}+{round(self.y + rise)}")
-        self.win.attributes("-alpha", 0.97 * k)
+        self.win.attributes("-alpha", FLOAT_ALPHA * k)
         if k <= 0:
             self.win.geometry("+-20000+-20000")
 
     def _schedule(self):
         if self.job:
             self.canvas.after_cancel(self.job)
-        self.job = self.canvas.after(100, self._check)
+        self.job = self.canvas.after(self.POLL, self._check)
 
     def _check(self):
         self.job = None
@@ -2492,7 +2511,7 @@ class CommandCard:
 
     def hide(self):
         if self.show_t.target != 0:
-            self.show_t.to(0, self.EXIT, ease_colour)
+            self.show_t.to(0, MOTION["exit"], ease_colour)
 
 
 # ---------------------------------------------------------------- popup windows
@@ -3011,6 +3030,7 @@ class Panel(Popup):
         changed = name != self.tab
         if changed and name == "Commands":
             self.commands_view = "main"
+            self.app.refresh_commands()   # pick up apps installed since the last look
         self.tab = name
         self.page_title.config(text=name)
         inner = self.scroll.inner
@@ -3634,7 +3654,7 @@ class App:
     TAP = 0.3             # a press shorter than this is a tap, not a hold
     HANDSFREE_MAX = 600   # stop hands-free automatically after 10 minutes
     EARLY_PAUSE = 0.7     # a pause this long checks whether a Command is already complete
-    CONFIRM_WAIT = 6.0    # --duration-confirm-wait: silence that cancels a Confirmation
+    CONFIRM_WAIT = MOTION["confirm_wait"] / 1000   # silence that cancels a Confirmation
 
     def __init__(self):
         self.cfg = load_config()
@@ -3656,6 +3676,7 @@ class App:
         self.wake_session = False   # the current dictation was started by the wake word
         self.peeked_at = 0          # last_voice time of the pause already checked for a Command
         self.answer_turn = False    # the current turn is a yes/no for a Confirmation
+        self.catalog_loading, self.catalog_loaded_at = False, 0.0
         self.asking = None          # the Confirmation waiting for an answer
         aliases = [commands.Alias(a["say"], a["target_id"], a.get("suggested", False))
                    for a in self.cfg["aliases"] if isinstance(a, dict) and a.get("say") and a.get("target_id")]
@@ -3721,7 +3742,7 @@ class App:
         self._start_tray()
         threading.Thread(target=self._load_engine, daemon=True).start()
         threading.Thread(target=self._watch_mics, daemon=True).start()
-        threading.Thread(target=self._load_commands, daemon=True).start()
+        self.refresh_commands()
         self.root.after(30, self._tick)
 
     def _early_check(self, session):
@@ -3738,6 +3759,16 @@ class App:
     def _end_turn_early(self):
         self.handsfree = False
         self._stop()
+
+    CATALOG_REFRESH = 600   # seconds: apps installed while running become openable by voice
+
+    def refresh_commands(self):
+        """Re-list installed apps in the background (startup, every few minutes, and
+        when the Commands page opens). One listing at a time."""
+        if self.catalog_loading:
+            return
+        self.catalog_loading, self.catalog_loaded_at = True, time.time()
+        threading.Thread(target=self._load_commands, daemon=True).start()
 
     def _load_commands(self):
         """Lists the installed apps for Commands (takes ~1 s, so off the UI thread)."""
@@ -3762,9 +3793,12 @@ class App:
                 save_config(self.cfg)
             apps = sum(t.kind == "app" for t in self.commands.catalog)
             log(f"Commands: {apps} apps, {len(self.commands.catalog) - apps} places")
-            self.post("call", lambda: self.panel.visible and self.panel.tab == "Commands" and self.panel.refresh())
+            self.post("call", lambda: self.panel.visible and self.panel.tab == "Commands"
+                      and self.panel.commands_view == "main" and self.panel.refresh())  # never mid-edit
         except Exception as e:
             log("Couldn't list apps for Commands:", repr(e))
+        finally:
+            self.catalog_loading = False
 
     def _record_command_use(self, target_id, heard):
         try:
@@ -3786,9 +3820,9 @@ class App:
         card = out.card
         log(f"Command: {text!r} -> {type(out).__name__} {card.verb} {card.obj}")
         if card.kind == "done":
-            self._beep(1320, 30)   # soft tick
+            self._beep(*TONES["success"])
         else:
-            self._beep(330, 140)   # low tone: a miss, not an error
+            self._beep(*TONES["miss"])   # a miss, not an error
         self.post("overlay", "idle")
         self.post("card", card)
         return True
@@ -3812,6 +3846,8 @@ class App:
             if self._area() != self.area:
                 self._rebuild_bars("screen or taskbar changed")
         self.last_tick = now
+        if now - self.catalog_loaded_at > self.CATALOG_REFRESH:
+            self.refresh_commands()
         fg = user32.GetForegroundWindow()
         if fg:  # remember the last app you were in (any window not owned by LocalFlow)
             pid = ctypes.wintypes.DWORD()
@@ -3938,10 +3974,15 @@ class App:
         """Show the Confirmation and listen for yes/no once this turn has finished."""
         self.card.ask(asked, self._answered)
 
+        give_up = time.time() + self.CONFIRM_WAIT
+
         def listen():
             if self.asking is not asked:
                 return
             if self.busy or self.session or self.starting:
+                if time.time() > give_up:   # the last turn never finished: keep the apps open
+                    self._answered(False, asked)
+                    return
                 self.root.after(50, listen)
                 return
             mic = self.ambient.mic if self.ambient.running else None
@@ -3967,7 +4008,7 @@ class App:
                 self.post("ask", out)
                 return
             if yes:
-                self._beep(1320, 30)
+                self._beep(*TONES["success"])
             self.post("card", out.card)
         threading.Thread(target=run, daemon=True).start()
 
@@ -4049,7 +4090,7 @@ class App:
             self.starting = True
         self.watcher.cancel()
         if not answer:
-            for freq, ms in ((660, 70), (990, 110)):  # always play: it's your cue to talk
+            for freq, ms in TONES["wake"]:  # always play: it's your cue to talk
                 winsound.Beep(freq, ms)
         try:
             mic.detach()

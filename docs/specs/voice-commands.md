@@ -222,8 +222,26 @@ ones built from the apps the user opens most. Everything runs offline with no AI
 - "Cortana" is a Microsoft trademark: never ship it as a default name, logo or asset.
 - Performance: idle CPU must stay ~0 (CLAUDE.md). Catalog and icon work happens on a
   background thread; icons are cached.
-- Open design questions remain in design/DESIGN.md (card above the pill when the pill
-  is low on screen; exact tones).
+- Open design questions remain in design/DESIGN.md (exact tones). The card sits above
+  the pill, since the pill is on the taskbar.
+
+## As built (differences from the decisions above, after code review)
+
+- **Seam:** `handle(heard_text, context)` has no `source`. Hold-to-talk decides in the app
+  (a pure `classify_focus` rule in the Windows module, unit-tested) and then calls the
+  same `handle`. Confirmation is `answer(heard) -> yes | no | None` (None counts as no)
+  and `confirm(asked, yes, context)`, not `on_yes`/`on_no` callbacks. The parsed request
+  type is `Command` (the glossary avoids "intent").
+- **No match vs Dictation for media:** "play/pause/resume/skip <unknown>" and
+  "volume <not a number>" are No match. "next/previous/back/stop <unknown>" stay
+  Dictation, because they often start ordinary sentences ("next week we meet").
+- **Word limit:** searches may run to 14 words (they carry a query); everything else ≤ 6.
+- **Catalog refresh:** at startup, every 10 minutes, and when the Commands page opens.
+- **Extras kept:** phrases "stop" (pause), "back", "louder", "quieter", "look up",
+  "show desktop", "hide everything", "exit", "yes please", "no thanks"; folders and
+  websites the user adds (`user_places` in config); Start / Stop LocalFlow desktop
+  shortcuts and `stop.bat`.
+- Suggested Routines appear only when their apps are installed.
 
 ## Progress
 

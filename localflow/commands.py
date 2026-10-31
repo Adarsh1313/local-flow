@@ -143,7 +143,10 @@ def alias_target(name, ctx):
     if ctx is None:
         return None
     by_id = {t.id: t for t in ctx.catalog}
-    scored = [(difflib.SequenceMatcher(None, name, normalise(a.say)).ratio(), a) for a in ctx.aliases
+    def forms(a):   # a folder Alias also answers to "<name> folder"
+        say = normalise(a.say)
+        return (say, say + " folder") if by_id[a.target_id].kind == "folder" else (say,)
+    scored = [(max(difflib.SequenceMatcher(None, name, f).ratio() for f in forms(a)), a) for a in ctx.aliases
               if a.target_id in by_id]
     best = max(scored, key=lambda x: x[0], default=None)
     return by_id[best[1].target_id] if best and best[0] >= MATCH_THRESHOLD else None
@@ -163,7 +166,7 @@ def best_target(name, catalog, ctx=None):
 
 
 @dataclass(frozen=True)
-class Intent:
+class Command:
     """A Command understood but not yet carried out."""
     kind: str               # "open", "media", "volume", "mute", "unmute", "volume up", ...
     target: Target = None
@@ -176,6 +179,7 @@ class Intent:
 MEDIA_VERBS = {"pause": "pause", "stop": "pause", "play": "play", "resume": "play",
                "next": "next", "skip": "next", "next song": "next", "next track": "next",
                "previous": "previous", "back": "previous", "previous song": "previous", "previous track": "previous"}
+MEDIA_NAMING_VERBS = {"play", "pause", "resume", "skip"}   # rarely start a sentence, so a miss is a No match
 MEDIA_DONE = {"pause": "Paused", "play": "Playing", "next": "Next track", "previous": "Previous track"}
 NUMBERS = {w: i for i, w in enumerate(
     "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
@@ -215,55 +219,62 @@ GLYPH_MINIMISE, GLYPH_CLOSED, GLYPH_KEPT = "", "", ""
 
 
 def understand(heard, ctx):
-    """What the turn asks for: an Intent, a NoMatch, or None for Dictation. Never acts."""
+    """What the turn asks for: an Command, a NoMatch, or None for Dictation. Never acts."""
     spoken = command_text(heard)
     words = normalise(spoken)
     routine = next((r for r in ctx.routines if normalise(r.name) == words), None)
     if routine:
-        return Intent("routine", routine=routine)
+        return Command("routine", routine=routine)
     m = SEARCH.match(words)
     if m and len(words.split()) <= MAX_SEARCH_WORDS:
         query, where = heard_query(spoken, m.group("q")), (m.group("where") or "web")
         if where in ("spotify", "youtube", "web", "the web", "google"):
-            return Intent("search", find_by_name("Spotify", ctx.catalog) if where == "spotify" else None,
+            return Command("search", find_by_name("Spotify", ctx.catalog) if where == "spotify" else None,
                           action="web" if where in ("the web", "google") else where, query=query)
         return NoMatch(Card("Can't search", where, kind="no_match"))
     if len(words.split()) > MAX_COMMAND_WORDS:
         return None
     if words in ("mute", "unmute", "volume up", "volume down", "louder", "quieter"):
-        return Intent(words)
+        return Command(words)
     if words.startswith("volume "):
         level = spoken_number(words[len("volume "):])
-        return Intent("volume", level=min(100, level)) if level is not None else None
+        if level is None:
+            return NoMatch(Card("No volume", words[len("volume "):], kind="no_match"))
+        return Command("volume", level=min(100, level))
     for phrase in sorted(MEDIA_VERBS, key=len, reverse=True):
         if words == phrase:
-            return Intent("media", action=MEDIA_VERBS[phrase])
+            return Command("media", action=MEDIA_VERBS[phrase])
         if words.startswith(phrase + " "):
-            t = best_target(words[len(phrase) + 1:], ctx.catalog, ctx)
-            return Intent("media", t, action=MEDIA_VERBS[phrase]) if t else None
+            name = words[len(phrase) + 1:]
+            t = best_target(name, ctx.catalog, ctx)
+            if t:
+                return Command("media", t, action=MEDIA_VERBS[phrase])
+            if phrase in MEDIA_NAMING_VERBS:   # "play blender": clearly a command that missed
+                return NoMatch(Card("No app called", name, kind="no_match"))
+            return None   # "next week we meet", "back to work": dictation
     if words in CLOSE_ALL:
-        return Intent("close_all")
+        return Command("close_all")
     if words in MINIMISE_ALL:
-        return Intent("minimise_all")
+        return Command("minimise_all")
     for verbs, kind in ((CLOSE_VERBS, "close"), (MINIMISE_VERBS, "minimise")):
         for verb in verbs:
             if words.startswith(verb + " "):
                 t = best_target(words[len(verb) + 1:], [t for t in ctx.catalog if t.kind == "app"], ctx)
-                return Intent(kind, t) if t else NoMatch(Card("No app called", words[len(verb) + 1:], kind="no_match"))
+                return Command(kind, t) if t else NoMatch(Card("No app called", words[len(verb) + 1:], kind="no_match"))
     for verb in OPEN_VERBS:
         if words.startswith(verb + " "):
             name = words[len(verb) + 1:]
             t = best_target(name, ctx.catalog, ctx)
-            return Intent("open", t) if t else NoMatch(Card("No app called", name, kind="no_match"))
+            return Command("open", t) if t else NoMatch(Card("No app called", name, kind="no_match"))
     aliased = alias_target(words, ctx)    # saying just an Alias opens it: "music"
     if aliased:
-        return Intent("open", aliased)
+        return Command("open", aliased)
     return None
 
 
 def is_complete_command(heard, ctx):
     """True when what's been said so far is a whole Command, so the turn can end early."""
-    return isinstance(understand(heard, ctx), Intent)
+    return isinstance(understand(heard, ctx), Command)
 
 
 def heard_query(heard, normalised_query):
@@ -289,50 +300,50 @@ def used(target, heard, ctx):
         ctx.on_use(target.id, heard)
 
 
-def carry_out(intent, ctx):
+def carry_out(command, ctx):
     a = ctx.actions
-    if intent.kind == "routine":
-        return run_routine(intent.routine, ctx)
-    if intent.kind == "media":
-        player = a.media(intent.action, intent.target)
+    if command.kind == "routine":
+        return run_routine(command.routine, ctx)
+    if command.kind == "media":
+        player = a.media(command.action, command.target)
         if not player:
             return NoMatch(Card("Nothing", "playing", kind="no_match"))
-        app = intent.target or find_by_name(player, ctx.catalog)
-        return Done(Card(MEDIA_DONE[intent.action], player, app.id if app else ""))
-    if intent.kind == "search":
-        q = intent.query if intent.action == "spotify" else intent.query.lower()
-        a.open_url(SEARCH_URLS[intent.action](q))
-        return Done(Card("Searching " + SEARCH_NAMES[intent.action], intent.query,
-                         intent.target.id if intent.target else "", glyph=GLYPH_SEARCH))
-    if intent.kind == "volume":
-        a.set_volume(intent.level)
-        return Done(Card("Volume", f"{intent.level}%", glyph=GLYPH_VOLUME))
-    if intent.kind in ("volume up", "louder", "volume down", "quieter"):
-        level = a.change_volume(VOLUME_STEP if intent.kind in ("volume up", "louder") else -VOLUME_STEP)
+        app = command.target or find_by_name(player, ctx.catalog)
+        return Done(Card(MEDIA_DONE[command.action], player, app.id if app else ""))
+    if command.kind == "search":
+        q = command.query if command.action == "spotify" else command.query.lower()
+        a.open_url(SEARCH_URLS[command.action](q))
+        return Done(Card("Searching " + SEARCH_NAMES[command.action], command.query,
+                         command.target.id if command.target else "", glyph=GLYPH_SEARCH))
+    if command.kind == "volume":
+        a.set_volume(command.level)
+        return Done(Card("Volume", f"{command.level}%", glyph=GLYPH_VOLUME))
+    if command.kind in ("volume up", "louder", "volume down", "quieter"):
+        level = a.change_volume(VOLUME_STEP if command.kind in ("volume up", "louder") else -VOLUME_STEP)
         return Done(Card("Volume", f"{level}%", glyph=GLYPH_VOLUME))
-    if intent.kind in ("mute", "unmute"):
-        a.mute(intent.kind == "mute")
-        return Done(Card("Muted" if intent.kind == "mute" else "Sound", "Sound" if intent.kind == "mute" else "On",
-                         glyph=GLYPH_MUTE if intent.kind == "mute" else GLYPH_VOLUME))
-    if intent.kind == "minimise_all":
+    if command.kind in ("mute", "unmute"):
+        a.mute(command.kind == "mute")
+        return Done(Card("Muted" if command.kind == "mute" else "Sound", "Sound" if command.kind == "mute" else "On",
+                         glyph=GLYPH_MUTE if command.kind == "mute" else GLYPH_VOLUME))
+    if command.kind == "minimise_all":
         a.minimise_all()
         return Done(Card("Minimised", "Everything", glyph=GLYPH_MINIMISE))
-    if intent.kind == "close_all":
+    if command.kind == "close_all":
         apps = closable(ctx)
         if len(apps) >= 2:
             return NeedsConfirmation(f"Close {len(apps)} apps?", apps)
         if not apps:
             return NoMatch(Card("Nothing", "to close", kind="no_match"))
-        intent = Intent("close", apps[0][0])
-    if intent.kind in ("close", "minimise"):
-        t = intent.target
+        command = Command("close", apps[0][0])
+    if command.kind in ("close", "minimise"):
+        t = command.target
         if not any(r[0].id == t.id for r in a.running_apps([t])):
             return NoMatch(Card("Not open", t.name, t.id, "no_match"))
-        if normalise(t.name).replace(" ", "") in NEVER_CLOSE and intent.kind == "close":
+        if normalise(t.name).replace(" ", "") in NEVER_CLOSE and command.kind == "close":
             return NoMatch(Card("Can't close", t.name, t.id, "no_match"))
-        (a.close if intent.kind == "close" else a.minimise)(t)
-        return Done(Card("Closing" if intent.kind == "close" else "Minimised", t.name, t.id))
-    t = intent.target
+        (a.close if command.kind == "close" else a.minimise)(t)
+        return Done(Card("Closing" if command.kind == "close" else "Minimised", t.name, t.id))
+    t = command.target
     if t.kind != "app":
         try:
             a.open_place(t)
@@ -384,7 +395,7 @@ def run_routine(routine, ctx):
                 ctx.actions.close(target)
         elif step.type == "open":
             used(target, routine.name, ctx)
-            result = carry_out(Intent("open", target), ctx)
+            result = carry_out(Command("open", target), ctx)
             if isinstance(result, Failed):
                 return result
         else:

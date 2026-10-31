@@ -122,7 +122,7 @@ def test_commands_settings_pages_build_offscreen():
     app.cfg = dict(localflow.DEFAULTS)
     spotify = commands.Target("spotify", "Spotify")
     app.commands = commands.Context([spotify], winactions.Actions(), aliases=[commands.Alias("music", "spotify")])
-    app.restart = app.quit = lambda: None
+    app.restart = app.quit = app.refresh_commands = lambda: None
     app.set_option = lambda key, value: app.cfg.__setitem__(key, value)
     app.panel_leave = 1.0
     app.picker = app.mic_menu = type("HiddenPopup", (), {"hide": lambda self: None})()

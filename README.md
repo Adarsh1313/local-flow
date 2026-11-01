@@ -1,6 +1,6 @@
 # LocalFlow
 
-**Wispr Flow-style dictation that runs entirely on a 2019 budget laptop. Free, offline, Windows.**
+**The private, offline successor to “Hey Cortana” and Wispr Flow-style dictation—built for a 2019 budget laptop.**
 
 Hold a key, talk, let go: your words appear wherever the cursor is, punctuated and
 cleaned up. No account, no cloud, no word limits.
@@ -62,10 +62,13 @@ cloud sync.
 |---|---|
 | **Hold to talk** | Hold Right Ctrl, speak, release. Pasted into any app |
 | **Hands-free** | Double-tap Right Ctrl; tap again to finish |
-| **Wake word** (opt-in) | Say "Hey Jarvis", wait for the chime, talk; a pause ends it |
+| **Wake word** (on by default) | Say "Hey Jarvis", wait for the chime, talk; a pause ends it |
+| **Offline Commands** | “Hey Jarvis, open Spotify”, “pause”, “volume 30”, “open Downloads”, “close everything” |
+| **Names and Routines** | “music” can mean Spotify; “work mode” can open several apps together |
 | **Clean text** | Punctuation and casing from the model; "um"/"uh" removed; pauses don't break sentences |
-| **Spoken lists** | "One… two… three…" or "next point…" becomes a numbered or bulleted list |
-| **Self-learning dictionary** | Fix a misheard name once and it's spelled right from then on, without breaking everyday words |
+| **Spoken lists** | "One… two… three…" or "next point…" becomes a numbered or bulleted list, with or without punctuation |
+| **Numbers as digits** | "twenty twenty six" → 2026, "twenty dollars" → $20, "at three thirty" → 3:30 |
+| **Self-learning dictionary** | Fix a misheard name once and it's spelled right from then on, without breaking everyday words. About 350 built-in Starter words (ChatGPT, Codex, Bengaluru…) |
 | **Recent transcripts** | Ctrl+Alt+V: your last 9 dictations, Win+V style, click to paste again |
 | **Smart microphone** | Picks the best mic automatically, survives Bluetooth hiccups, switches when a headset connects |
 | **Scratchpad and history** | A notepad that saves as you type; history with fix/copy/paste |
@@ -113,8 +116,9 @@ Each of these was a trade-off; the "why" is what I'd defend in a review.
 | **Right Ctrl, not Fn** | Fn like Wispr Flow on Mac | On most Windows laptops Fn is handled by the keyboard itself and never reaches Windows |
 | **Ctrl+Alt+V for recent transcripts** | Alt+Shift+V | Overlay apps on the machine swallowed Alt shortcuts. Found by testing, not assumption |
 | **Keep the mic open for a minute after dictating** | Open it on every key press | Bluetooth earbuds take ~1 s to switch into headset mode and were cutting off first words. Cost: the Windows mic icon stays on and earbuds stay in call mode, so it's a setting |
-| **Dictionary with guardrails** | Swap a corrected word everywhere | A real failure: learning "New → Neu" turned every "new" into "Neu". Now everyday words only swap next to the words they were learned with, and edits like "Thursday → Friday" aren't learned |
-| **Wake word by matching the sound of short phrases** | A trained wake-word model (openWakeWord) | Works for any phrase immediately, no training. Listens on the laptop mic only, and nothing is stored while listening |
+| **Dictionary with guardrails** | Swap a corrected word everywhere | A real failure: learning "New → Neu" turned every "new" into "Neu". Now everyday words only swap next to the words they were learned with, and edits between two everyday words ("patch → batch") are only learned the second time |
+| **A wake-word model for "Hey Jarvis"** | Transcribe short bursts of speech and match how they sound | Burst matching needed a raised voice. openWakeWord's offline model hears a normal voice and runs only while there's sound, so idle CPU stays near zero. Other phrases still use burst matching. Laptop mic by default, nothing stored |
+| **No hotword boosting yet** | sherpa-onnx with hotwords | Its hotword decoding for Parakeet currently returns empty or garbled text about 20% of the time. The Dictionary fixes those terms after recognition instead |
 | **Rule-based lists** | Ask an LLM to format | Predictable, offline, about 1 ms. An LLM would add 1–3 s to every dictation |
 | **Windows 11 Fluent look** | Two other explored directions | Picked from three rendered options. It should feel native, not like a web page |
 | **Open-source code, private data** | Ship sample personal data | Personal recordings, history and dictionary never leave the machine |
@@ -125,12 +129,14 @@ Each of these was a trade-off; the "why" is what I'd defend in a review.
 flowchart LR
     subgraph Input
         K[Hold key / double-tap<br/>keyboard hook] --> S
-        W[Wake word listener<br/>laptop mic, VAD + phrase match] --> S
+        W[Wake word listener<br/>laptop mic, openWakeWord model] --> S
         M[Microphone<br/>WASAPI · auto-pick · kept warm] --> S
     end
     S[Session<br/>cuts audio at pauses] -->|phrases while you talk| P[Parakeet TDT 0.6B<br/>ONNX int8 · CPU]
     P --> J[Join phrases<br/>repair false breaks]
-    J --> T[Text clean-up<br/>fillers · dictionary · lists<br/>optional Ollama]
+    J --> Q{Command?}
+    Q -->|yes| A[Offline Windows actions<br/>apps · media · places · routines]
+    Q -->|no| T[Text clean-up<br/>fillers · dictionary · Starter words<br/>numbers · lists · optional Ollama]
     T --> V[Paste<br/>clipboard + Ctrl+V into the app you were in]
     V --> C[Correction watcher<br/>UI Automation]
     C -->|names you fix| D[(Dictionary)]
@@ -147,8 +153,8 @@ flowchart LR
   `faster-whisper` (CTranslate2) as the GPU / multilingual option.
 - **Windows glue:** a global keyboard hook (`keyboard`), UI Automation (`uiautomation`)
   to read back corrected text, `ctypes` for focus, window styles and DPI.
-- **UI:** Tkinter drawn to a small set of design tokens ([design brief](localflow/design/design-brief.md),
-  [tokens](localflow/design/tokens.css)).
+- **UI:** Tkinter drawn to a small set of design tokens ([design brief](design/DESIGN.md),
+  [tokens](design/tokens.css)).
 
 ## What I learned from real use
 
@@ -172,22 +178,24 @@ Personalisation is where a local tool can beat a cloud one, because it can learn
 data that would never be uploaded:
 
 1. **Fine-tune on my own voice.** LocalFlow can keep each dictation's audio with its
-   final, corrected text. With a few hours collected, a LoRA fine-tune of Whisper
-   (free Colab GPU, about an hour) should cut mishearings of my accent and vocabulary.
+   final, corrected text (Settings → General → Keep recordings for training). With a
+   few hours collected, an adapter fine-tune of Parakeet on a free Colab GPU should cut
+   mishearings of my accent and vocabulary.
 2. **A dictionary that keeps learning.** Corrections already teach it names. Next is
    learning from what I re-type most, and showing which corrections paid off.
 3. **History-based personalisation.** Use past dictations to bias spelling and
    formatting towards how I actually write.
-4. **Command mode:** select text, say "make this shorter", with a local LLM.
+4. **AI rewrite Commands:** select text, say "make this shorter", with a local LLM.
 5. **Per-app style:** casual in chat, formal in email, code-aware in the IDE.
 6. **Snippets** ("my calendar link") and **backtracking** ("at 5, actually 6" → "at 6").
-7. **Split the single file** into modules with a test suite.
+7. **Keep splitting the single file.** Text clean-up, the dictionary, Starter words,
+   the wake word and training clips are now separate modules with tests. The UI is next.
 
 ## What it isn't (yet)
 
 See the full **[comparison with Wispr Flow](docs/wispr-comparison.md)**. In short:
 English-first (Parakeet is English-only; Whisper covers other languages more slowly),
-Windows-only, no command mode or per-app styles yet, and accuracy is a little behind a
+Windows-only, no AI rewrite Commands or per-app styles yet, and accuracy is a little behind a
 large cloud model on difficult audio.
 
 ## Run it
@@ -207,7 +215,9 @@ optional. Full instructions and every setting: **[user guide](docs/user-guide.md
 ## Privacy
 
 Audio is processed on your machine and never sent anywhere; the app makes no network
-requests (the optional AI cleanup talks only to Ollama on `localhost`). History,
+requests (the optional AI cleanup talks only to Ollama on `localhost`). Only `setup.bat`
+downloads, once: the Python packages, the speech model and the "Hey Jarvis" wake-word
+model. History,
 dictionary, notes and optional training recordings stay in the app's folder.
 
 ## Credits

@@ -1863,13 +1863,16 @@ def row(body, title, desc=None, on_click=None):
     body.rows += 1
     r = tk.Frame(body, bg=body.cget("bg"))
     r.pack(fill="x")
+    # the control is packed first, so it always gets its full width; the text wraps in what's left
+    right = tk.Frame(r, bg=r.cget("bg"))
+    right.pack(side="right", padx=(0, px(SPACE[3])))
     left = tk.Frame(r, bg=r.cget("bg"))
     left.pack(side="left", fill="x", expand=True, padx=(px(SPACE[4]), px(SPACE[2])), pady=px(SPACE[3] - 1))
     label(left, title).pack(fill="x")
     if desc:
-        label(left, desc, "caption", "muted", wraplength=px(330)).pack(fill="x")
-    right = tk.Frame(r, bg=r.cget("bg"))
-    right.pack(side="right", padx=(0, px(SPACE[3])))
+        d = label(left, desc, "caption", "muted", wraplength=px(330))
+        d.pack(fill="x")
+        left.bind("<Configure>", lambda e: d.config(wraplength=max(px(120), e.width)), add="+")
     if on_click:
         def paint(v, frames=(r, left, right)):
             color = mix(T["surface"], T["surface_hover"], v)
